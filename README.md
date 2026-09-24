@@ -21,8 +21,8 @@ X-Managed-By=met-desktop-manager
 **Daily use** (global `desktop-manager` command):
 
 ```bash
-git clone <repo-url> met-desktop-manager
-cd met-desktop-manager
+git clone https://github.com/ippokrates/MET.git
+cd MET
 pipx install .          # install the command
 pipx reinstall .        # pick up code changes later
 ```
