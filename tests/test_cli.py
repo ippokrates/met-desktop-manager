@@ -71,3 +71,38 @@ def test_interactive_empty_selection_removes_all(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(sys, "stdin", io.StringIO("\n"))
     interactive(target, state)
     assert not (target / "app-one.desktop").exists()
+
+
+def test_preticked_ids_match_by_binary(tmp_path):
+    from desktop_manager.__main__ import _preticked_ids
+    target = tmp_path / "apps"
+    target.mkdir()
+    (target / "old.desktop").write_text(
+        "[Desktop Entry]\nName=Old\nExec=/bin/fakeapp\nType=Application\n"
+        "X-Managed-By=met-desktop-manager\n")
+    state = {"file:fake": "old.desktop"}
+    apps = [DiscoveredApp(id="desktop:fake", name="Fake", exec_path="/bin/fakeapp")]
+    assert _preticked_ids(apps, state, target) == {"desktop:fake"}
+
+
+def test_interactive_adopts_id_changed_selection(tmp_path, capsys, monkeypatch):
+    """Harvest-incident replay: old state ID, new discovery ID, same binary."""
+    from desktop_manager.__main__ import interactive
+    target = tmp_path / "apps"
+    target.mkdir()
+    (target / "old.desktop").write_text(
+        "[Desktop Entry]\nName=Tool\nExec=mullvad-exclude /bin/tool\n"
+        "Type=Application\nX-Managed-By=met-desktop-manager\n")
+    state_file = tmp_path / "state.json"
+    state_file.write_text('{"file:tool": "old.desktop"}')
+    monkeypatch.setattr(
+        "desktop_manager.scanner.scan",
+        lambda cfg: [DiscoveredApp(id="desktop:tool", name="Tool",
+                                   exec_path="/bin/tool")])
+    monkeypatch.setattr(sys, "stdin", io.StringIO("1\n"))
+    interactive(target, state_file)
+    out = capsys.readouterr().out
+    assert (target / "old.desktop").exists()  # same file, not deleted
+    assert "adopted" in out
+    import json
+    assert json.loads(state_file.read_text()) == {"desktop:tool": "old.desktop"}

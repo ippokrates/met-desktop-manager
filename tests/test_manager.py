@@ -36,15 +36,70 @@ def test_create_writes_file_and_state(dirs):
 
 def test_sync_deselect_removes_only_managed(dirs):
     target, state = dirs
-    manager.create_desktop(_app(), target, state)
+    app = _app()
+    manager.create_desktop(app, target, state)
     handmade = target / "handmade.desktop"
     handmade.write_text("[Desktop Entry]\nName=X\nExec=/x\nType=Application\n")
 
-    res = manager.sync({}, target, state)
+    # Binary still discovered, just not selected: genuine deselect -> removed.
+    res = manager.sync({}, target, state, discovered={"file:vesktop": app})
     assert res["removed"] == ["vesktop.desktop"]
+    assert res["vanished"] == []
     assert not (target / "vesktop.desktop").exists()
     assert handmade.exists()  # unmanaged files always survive
     assert handmade.read_text().startswith("[Desktop Entry]\nName=X")
+
+
+def test_sync_vanished_is_kept_by_default(dirs):
+    target, state = dirs
+    app = _app()
+    manager.create_desktop(app, target, state)
+    # Binary gone from discovery and not selected: kept + reported.
+    res = manager.sync({}, target, state, discovered={})
+    assert res["removed"] == []
+    assert (target / "vesktop.desktop").exists()
+    assert res["vanished"] == [{"app_id": "file:vesktop",
+                                "filename": "vesktop.desktop",
+                                "binary": manager.managed_exec_key(
+                                    target / "vesktop.desktop")}]
+    assert json.loads(state.read_text()) == {"file:vesktop": "vesktop.desktop"}
+
+
+def test_sync_vanished_pruned_on_request(dirs):
+    target, state = dirs
+    manager.create_desktop(_app(), target, state)
+    res = manager.sync({}, target, state, discovered={}, prune_vanished=True)
+    assert res["removed"] == ["vesktop.desktop"]
+    assert not (target / "vesktop.desktop").exists()
+
+
+def test_sync_adopts_id_changed_entry(dirs):
+    """The harvest incident: same binary, new discovery ID -> adopt, no delete."""
+    target, state = dirs
+    manager.create_desktop(_app("file:vesktop", "Vesktop",
+                                "/opt/Vesktop/vesktop", "vesktop"), target, state)
+    new_app = {"id": "desktop:vesktop", "name": "VSCodium-Style Vesktop",
+               "exec_path": "/opt/Vesktop/vesktop", "icon": "vesktop"}
+    res = manager.sync({"desktop:vesktop": new_app}, target, state,
+                       discovered={"desktop:vesktop": new_app})
+    assert res["adopted"] == {"file:vesktop": "desktop:vesktop"}
+    assert res["removed"] == []
+    assert (target / "vesktop.desktop").exists()
+    assert "VSCodium-Style Vesktop (Excluded)" in (target / "vesktop.desktop").read_text()
+    assert json.loads(state.read_text()) == {"desktop:vesktop": "vesktop.desktop"}
+
+
+def test_find_orphaned_marks_vanished(dirs):
+    target, state = dirs
+    app = _app()
+    manager.create_desktop(app, target, state)
+    orphans = manager.find_orphaned(json.loads(state.read_text()), {},
+                                    target, discovered={})
+    assert orphans["file:vesktop"]["vanished"] is True
+    orphans2 = manager.find_orphaned(json.loads(state.read_text()), {},
+                                     target,
+                                     discovered={"file:vesktop": app})
+    assert orphans2["file:vesktop"]["vanished"] is False
 
 
 def test_sync_select_creates_and_updates(dirs):
@@ -57,7 +112,8 @@ def test_sync_select_creates_and_updates(dirs):
     res2 = manager.sync({"file:zen": _app("file:zen", "Zen Bin",
                                           "/home/user/Downloads/zen/zen-bin")},
                         target, state)
-    assert res2 == {"created": [], "removed": []}
+    assert res2["created"] == [] and res2["removed"] == []
+    assert res2["vanished"] == [] and res2["adopted"] == {}
 
 
 def test_name_collision_gets_suffix(dirs):
@@ -67,14 +123,19 @@ def test_name_collision_gets_suffix(dirs):
     assert dest.name == "handmade-2.desktop"
 
 
-def test_orphan_managed_file_reaped(dirs):
+def test_orphan_managed_file_reaped_only_when_pruning(dirs):
     target, state = dirs
     manager.create_desktop(_app(), target, state)
     orphan = target / "orphan.desktop"
     orphan.write_text("[Desktop Entry]\nX-Managed-By=met-desktop-manager\nExec=/x\n")
-    res = manager.sync({"file:vesktop": _app()}, target, state)
-    assert not orphan.exists()
-    assert "orphan.desktop" in res["removed"]
+    # Default: unknown stray files are kept + reported, not deleted.
+    res = manager.sync({"file:vesktop": _app()}, target, state, discovered={})
+    assert orphan.exists()
+    assert [v["filename"] for v in res["vanished"]] == ["orphan.desktop"]
+    # Explicit prune: reaped as before.
+    res2 = manager.sync({"file:vesktop": _app()}, target, state,
+                        discovered={}, prune_vanished=True)
+    assert not orphan.exists() and "orphan.desktop" in res2["removed"], res2
 
 
 def test_remove_desktop(dirs):

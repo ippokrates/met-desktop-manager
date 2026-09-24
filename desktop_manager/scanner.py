@@ -1,10 +1,12 @@
 """Scan system for executables.
 
 Sources (per apps.yaml):
-  1. path_dirs   — non-recursive, executable bit required
-  2. extra_dirs  — recursive, depth-limited (max_depth)
-  3. flatpak     — `flatpak list --app`
-  4. snap        — `snap list` -> /snap/bin/<name>
+  1. desktop_files — Exec= paths harvested from installed .desktop
+     launchers (curated by package maintainers, best metadata)
+  2. path_dirs   — non-recursive, executable bit required
+  3. extra_dirs  — recursive, depth-limited (max_depth)
+  4. flatpak     — `flatpak list --app`
+  5. snap        — `snap list` -> /snap/bin/<name>
 
 Dedupes by resolved exec path. Missing dirs / missing tools are skipped.
 """
@@ -13,6 +15,7 @@ from __future__ import annotations
 import fnmatch
 import os
 import re
+import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -33,6 +36,7 @@ DEFAULT_CONFIG = {
     "path_dirs": ["~/.local/bin", "/usr/local/bin"],
     "extra_dirs": ["/opt", "~/Downloads", "~/Applications", "~/.local/bin"],
     "max_depth": 3,
+    "desktop_files": {"enabled": True},
     "flatpak": {"enabled": True},
     "snap": {"enabled": True},
     "excludes": [
@@ -144,6 +148,43 @@ def _has_skip_ext(p: Path) -> bool:
     """True if the file (or any of its suffixes, e.g. .so.1) is a non-app type."""
     suffixes = [s.lower() for s in p.suffixes] or [p.suffix.lower()]
     return any(s in SKIP_EXTS or s.startswith(".so") for s in suffixes)
+
+
+def exec_key(exec_path: str) -> str:
+    """Stable cross-source identity for an executable.
+
+    Source-prefixed IDs (bin:/file:/desktop:) change when discovery does;
+    the underlying binary doesn't. Strips our `mullvad-exclude` wrapper and
+    field codes, resolves absolute paths (symlinks included) and bare names
+    via PATH. Multi-word commands (e.g. `flatpak run <id>`) normalize with
+    their first token resolved, staying distinct per app.
+    """
+    value = (exec_path or "").strip()
+    if not value:
+        return ""
+    if value.startswith("mullvad-exclude "):
+        value = value[len("mullvad-exclude "):].strip()
+    try:
+        tokens = shlex.split(value)
+    except ValueError:
+        return os.path.normpath(value)
+    tokens = [t for t in tokens if not FIELD_CODE_RE.fullmatch(t)]
+    if not tokens:
+        return ""
+    first = tokens[0]
+    if os.path.isabs(first):
+        try:
+            first = str(Path(first).resolve())
+        except OSError:
+            first = os.path.normpath(first)
+    elif "/" not in first:
+        found = shutil.which(first)
+        if found:
+            try:
+                first = str(Path(found).resolve())
+            except OSError:
+                first = os.path.normpath(found)
+    return first if len(tokens) == 1 else first + " " + " ".join(tokens[1:])
 
 
 # Tokens that are packaging noise, not part of an app's real name
@@ -305,6 +346,153 @@ def scan_extra_dirs(extra_dirs: list[str], max_depth: int, excludes: list[str]) 
     return apps
 
 
+# Launcher dirs harvested for Exec= paths (package-maintainer curated).
+# Later entries are fallbacks; all are skipped silently when missing.
+DESKTOP_FILE_DIRS = [
+    "/usr/share/applications",
+    "~/.local/share/applications",
+    "~/.local/share/flatpak/exports/share/applications",
+    "/var/lib/flatpak/exports/share/applications",
+]
+
+# freedesktop field codes (%f %F %u %U %d %D %n %N %i %c %k %v %m)
+FIELD_CODE_RE = re.compile(r"%[fFuUdDnNickvm]")
+ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def _clean_exec(value: str) -> tuple[str, int]:
+    """Split an Exec= line into (binary, extra_arg_count).
+
+    Strips field codes, `env` prefixes and VAR= assignments.
+    Returns ("", 0) when no usable binary remains.
+    """
+    try:
+        tokens = shlex.split(value.strip())
+    except ValueError:
+        return "", 0
+    tokens = [t for t in tokens if not FIELD_CODE_RE.fullmatch(t)]
+    while tokens and tokens[0] == "env":
+        tokens.pop(0)
+    while tokens and ENV_ASSIGN_RE.match(tokens[0]) and "/" not in tokens[0]:
+        tokens.pop(0)
+    if not tokens:
+        return "", 0
+    return tokens[0], len(tokens) - 1
+
+
+def _resolve_binary(binary: str) -> str:
+    """Resolve an Exec binary to an absolute, verified executable path."""
+    candidate: Path | None = None
+    if os.path.isabs(binary):
+        candidate = Path(binary)
+    elif "/" in binary:
+        return ""  # relative path with dirs: ambiguous, skip
+    else:
+        found = shutil.which(binary)
+        if found:
+            candidate = Path(found)
+    if candidate is None:
+        return ""
+    try:
+        resolved = candidate.resolve()
+    except OSError:
+        return ""
+    if not resolved.is_file() or _has_skip_ext(resolved):
+        return ""
+    if not _looks_executable(resolved):
+        return ""
+    return str(resolved)
+
+
+def _parse_desktop_file(path: Path) -> dict:
+    """First occurrence of each interesting key (locale variants ignored)."""
+    fields: dict[str, str] = {}
+    try:
+        text = path.read_text(errors="ignore")
+    except OSError:
+        return fields
+    if "X-Managed-By=met-desktop-manager" in text:
+        fields["managed"] = "yes"  # ours: never harvest our own output
+        return fields
+    for line in text.splitlines():
+        if line.startswith("Name=") and "Name" not in fields:
+            fields["Name"] = line[5:].strip()
+        elif line.startswith("Exec=") and "Exec" not in fields:
+            fields["Exec"] = line[5:].strip()
+        elif line.startswith("Icon=") and "Icon" not in fields:
+            fields["Icon"] = line[5:].strip()
+        elif line.startswith("Type=") and "Type" not in fields:
+            fields["Type"] = line[5:].strip()
+        elif line.startswith("NoDisplay=") and "NoDisplay" not in fields:
+            fields["NoDisplay"] = line[10:].strip().lower()
+        elif line.startswith("Hidden=") and "Hidden" not in fields:
+            fields["Hidden"] = line[7:].strip().lower()
+    return fields
+
+
+def scan_desktop_files(desktop_dirs: list[str] | None = None,
+                       excludes: list[str] | None = None) -> list[DiscoveredApp]:
+    """Harvest binaries referenced by installed .desktop launchers.
+
+    One entry per binary (fewest-args launcher wins, e.g. plain Codium over
+    "Codium --new-window"). Skips hidden entries, our own managed files,
+    and unresolvable/deleted binaries.
+    """
+    excludes = excludes or []
+    if desktop_dirs is None:
+        desktop_dirs = DESKTOP_FILE_DIRS
+    best: dict[str, tuple[int, str, DiscoveredApp]] = {}  # exec -> (nargs, fname, app)
+    for raw in desktop_dirs:
+        d = Path(os.path.expandvars(os.path.expanduser(str(raw))))
+        if not d.is_dir():
+            continue
+        try:
+            files = sorted(d.glob("*.desktop"))
+        except OSError:
+            continue
+        for f in files:
+            try:
+                fields = _parse_desktop_file(f)
+                if fields.get("managed"):
+                    continue
+                if fields.get("Type", "Application") != "Application":
+                    continue
+                if fields.get("NoDisplay") == "true" or fields.get("Hidden") == "true":
+                    continue
+                exec_line = fields.get("Exec", "")
+                # Skip foreign mullvad-wrapped launchers (e.g. handmade
+                # split-tunnel entries): not plain binaries we can adopt.
+                if not exec_line or exec_line.startswith("mullvad-exclude "):
+                    continue
+                binary, nargs = _clean_exec(exec_line)
+                if not binary:
+                    continue
+                resolved = _resolve_binary(binary)
+                if not resolved:
+                    continue
+                if _is_excluded(Path(resolved).name, excludes):
+                    continue
+                name = fields.get("Name", "") or _pretty_name(Path(resolved).stem)
+                icon = fields.get("Icon", "")
+                app = DiscoveredApp(
+                    id=f"desktop:{Path(resolved).stem.lower()}",
+                    name=name,
+                    exec_path=resolved,
+                    icon_hint=icon or _find_icon_hint(Path(resolved)),
+                    source=f"desktop:{d}",
+                )
+                prev = best.get(resolved)
+                if prev is None or (nargs, f.name) < (prev[0], prev[1]):
+                    best[resolved] = (nargs, f.name, app)
+            except OSError:
+                continue
+    seen_ids: set[str] = set()
+    apps = [entry[2] for entry in sorted(best.values(), key=lambda e: e[2].name.lower())]
+    for app in apps:  # ensure unique ids (same stem, different dirs)
+        app.id = _unique_id(app.id, seen_ids)
+    return apps
+
+
 def scan_flatpak(enabled: bool = True) -> list[DiscoveredApp]:
     if not enabled or shutil.which("flatpak") is None:
         return []
@@ -372,6 +560,10 @@ def scan(config: dict | None = None) -> list[DiscoveredApp]:
     max_depth = int(cfg.get("max_depth", 3) or 3)
 
     found: list[DiscoveredApp] = []
+    desk_cfg = cfg.get("desktop_files", {})
+    desk_enabled = desk_cfg.get("enabled", True) if isinstance(desk_cfg, dict) else bool(desk_cfg)
+    if desk_enabled:
+        found.extend(scan_desktop_files(excludes=excludes))
     found.extend(scan_path_dirs(cfg.get("path_dirs", []), excludes))
     found.extend(scan_extra_dirs(cfg.get("extra_dirs", []), max_depth, excludes))
 

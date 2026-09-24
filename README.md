@@ -21,8 +21,8 @@ X-Managed-By=met-desktop-manager
 **Daily use** (global `desktop-manager` command):
 
 ```bash
-git clone https://github.com/ippokrates/MET.git
-cd MET
+git clone https://github.com/ippokrates/met-desktop-manager.git
+cd met-desktop-manager
 pipx install .          # install the command
 pipx reinstall .        # pick up code changes later
 ```
@@ -65,10 +65,14 @@ apps.yaml → scanner → picker → generator → manager → ~/.local/share/ap
                              │                 state.json (memory)
 ```
 
-- **Scanner** (`desktop_manager/scanner.py`) - finds executables in
-  `path_dirs` (flat) and `extra_dirs` (recursive, depth-limited), plus
-  `flatpak` and `snap`. Filters noise with `excludes`, an extension
-  blocklist, and magic-byte checks, so only real binaries and scripts pass.
+- **Scanner** (`desktop_manager/scanner.py`) - three tiers:
+  installed launchers first (`Exec=` paths harvested from
+  `/usr/share/applications` etc., with maintainer Name/Icon - this is how
+  distro-installed apps like VSCodium show up with no extra config), then
+  `flatpak`/`snap`, then raw filesystem scan of `path_dirs` (flat) and
+  `extra_dirs` (recursive, depth-limited). Filters noise with `excludes`,
+  an extension blocklist, and magic-byte checks, so only real binaries
+  and scripts pass.
 - **Generator** (`desktop_manager/generator.py`) - builds the `.desktop`
   text: `mullvad-exclude` prefix, `(Excluded)` suffix, safe filenames
   (`google-chrome.desktop`), quoting for paths with spaces.
@@ -86,6 +90,12 @@ apps.yaml → scanner → picker → generator → manager → ~/.local/share/ap
   Your existing launchers (e.g. `google-chrome.desktop` handmade earlier)
   always survive.
 - A name collision never overwrites - the new file gets a `-2` suffix.
+- Selections are matched by executable, not just ID: if discovery changes
+  (e.g. an app moves from filesystem scan to launcher harvest), your
+  selection is adopted, not deleted.
+- Apps that vanish from discovery are kept and reported, never silently
+  removed. Deleting them requires an explicit extra confirmation
+  (`--sync --all` refuses and exits nonzero instead).
 
 ## Configure (`apps.yaml`)
 
@@ -93,6 +103,7 @@ apps.yaml → scanner → picker → generator → manager → ~/.local/share/ap
 path_dirs:   # scanned flat, executables only
 extra_dirs:  # scanned recursively, max_depth levels deep
 max_depth: 3
+desktop_files: {enabled: true}  # harvest Exec= from installed launchers
 flatpak: {enabled: true}
 snap: {enabled: true}
 excludes:    # substrings or globs, e.g. uninstall, "*.so*", crashpad
@@ -114,7 +125,7 @@ checked with `desktop-file-validate` where available.
 ## Layout
 
 ```
-MET/
+met-desktop-manager/
 ├── desktop_manager/
 │   ├── __main__.py    # CLI: flags + interactive picker + rich summary
 │   ├── scanner.py     # app discovery

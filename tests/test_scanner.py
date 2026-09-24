@@ -58,6 +58,18 @@ def test_pretty_name_keeps_legit_names():
     assert s._pretty_name("2to3-3.11") == "2To3"
 
 
+def test_exec_key_stable_across_sources():
+    # Same binary under different IDs/wrappers -> identical key.
+    assert s.exec_key("/opt/Vesktop/vesktop") == s.exec_key(
+        "mullvad-exclude /opt/Vesktop/vesktop")
+    assert s.exec_key("/opt/Vesktop/vesktop %U") == s.exec_key(
+        "/opt/Vesktop/vesktop")
+    assert s.exec_key("") == ""
+    # Multi-word commands stay distinct per app.
+    assert s.exec_key("flatpak run org.a.App") != s.exec_key("flatpak run org.b.App")
+    assert s.exec_key("flatpak run org.a.App") == s.exec_key("flatpak run org.a.App")
+
+
 def test_scan_path_dirs_finds_and_skips(tmp_path):
     bindir = tmp_path / "bin"
     good = _make_exe(bindir / "myapp")
@@ -105,9 +117,101 @@ def test_scan_full_with_tmp_config(tmp_path):
 
 def test_scan_empty_config_with_disabled_managers():
     cfg = {"path_dirs": [], "extra_dirs": [],
+           "desktop_files": {"enabled": False},
            "flatpak": {"enabled": False}, "snap": {"enabled": False}}
     assert s.scan(cfg) == []
 
 
 def test_load_config_missing_returns_empty():
     assert s.load_config("/nonexistent-xyz.yaml") == {}
+
+
+def test_clean_exec_strips_codes_and_wrappers():
+    assert s._clean_exec("/usr/share/codium/codium %F") == ("/usr/share/codium/codium", 0)
+    assert s._clean_exec("/usr/share/codium/codium --new-window %F") == (
+        "/usr/share/codium/codium", 1)
+    assert s._clean_exec("env WEBKIT_DISABLE_X=1 myapp %u") == ("myapp", 0)
+    assert s._clean_exec("FOO=1 myapp --flag") == ("myapp", 1)
+    assert s._clean_exec('myapp "some arg" %U') == ("myapp", 1)
+    assert s._clean_exec("%F") == ("", 0)
+    assert s._clean_exec("") == ("", 0)
+
+
+def _exe(path):
+    import stat
+    path.write_bytes(b"\x7fELF" + b"\x00" * 60)
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+    return path
+
+
+def test_resolve_binary(tmp_path, monkeypatch):
+    real = _exe(tmp_path / "realapp")
+    assert s._resolve_binary(str(real)) == str(real.resolve())
+    assert s._resolve_binary("/nonexistent-xyz-app") == ""
+    assert s._resolve_binary("rel/dir/app") == ""  # ambiguous, skipped
+    (tmp_path / "data.txt").write_text("not executable")
+    assert s._resolve_binary(str(tmp_path / "data.txt")) == ""
+    monkeypatch.setenv("PATH", str(tmp_path), prepend=os.pathsep)
+    assert s._resolve_binary("realapp") == str(real.resolve())
+    assert s._resolve_binary("definitely-not-here-xyz") == ""
+
+
+def test_parse_desktop_file(tmp_path):
+    f = tmp_path / "a.desktop"
+    f.write_text("[Desktop Entry]\nName=Demo\nName[de]=X\nExec=/bin/demo %F\n"
+                 "Icon=demo\nType=Application\n")
+    fields = s._parse_desktop_file(f)
+    assert fields["Name"] == "Demo"  # locale variant ignored
+    assert fields["Exec"] == "/bin/demo %F"
+    assert fields["Icon"] == "demo"
+    mine = tmp_path / "mine.desktop"
+    mine.write_text("[Desktop Entry]\nX-Managed-By=met-desktop-manager\nExec=/x\n")
+    assert s._parse_desktop_file(mine).get("managed") == "yes"
+
+
+def _launcher(directory, filename, body):
+    p = directory / filename
+    p.write_text(body)
+    return p
+
+
+def test_scan_desktop_files_harvests_and_prefers_plain(tmp_path):
+    appdir = tmp_path / "applications"
+    appdir.mkdir()
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    _exe(bindir / "coolapp")
+    _launcher(appdir, "coolapp.desktop",
+              "[Desktop Entry]\nName=Cool App\nExec=" + str(bindir / "coolapp") + " %F\n"
+              "Icon=coolapp\nType=Application\n")
+    _launcher(appdir, "coolapp-newwin.desktop",
+              "[Desktop Entry]\nName=Cool New Window\nExec=" + str(bindir / "coolapp")
+              + " --new-window %F\nIcon=coolapp\n")
+    apps = s.scan_desktop_files([str(appdir)], excludes=[])
+    assert len(apps) == 1  # same binary deduped
+    assert apps[0].name == "Cool App"  # fewest-args launcher wins
+    assert apps[0].icon_hint == "coolapp"
+    assert apps[0].exec_path == str((bindir / "coolapp").resolve())
+
+
+def test_scan_desktop_files_skips(tmp_path):
+    appdir = tmp_path / "applications"
+    appdir.mkdir()
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    _exe(bindir / "okapp")
+    _launcher(appdir, "ok.desktop",
+              "[Desktop Entry]\nName=Ok\nExec=" + str(bindir / "okapp") + "\n")
+    _launcher(appdir, "hidden.desktop",
+              "[Desktop Entry]\nName=H\nExec=" + str(bindir / "okapp") + "\nNoDisplay=true\n")
+    _launcher(appdir, "link.desktop",
+              "[Desktop Entry]\nName=L\nExec=" + str(bindir / "okapp") + "\nType=Link\n")
+    _launcher(appdir, "gone.desktop",
+              "[Desktop Entry]\nName=G\nExec=/nonexistent-xyz-app\n")
+    _launcher(appdir, "mine.desktop",
+              "[Desktop Entry]\nName=M\nExec=" + str(bindir / "okapp") + "\n"
+              "X-Managed-By=met-desktop-manager\n")
+    apps = s.scan_desktop_files([str(appdir)], excludes=[])
+    assert [a.name for a in apps] == ["Ok"]
+    # excludes apply to harvested binaries too
+    assert s.scan_desktop_files([str(appdir)], excludes=["okapp"]) == []
