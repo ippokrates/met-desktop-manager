@@ -1,6 +1,6 @@
 # MET Desktop Manager
 
-Pick apps in a terminal checklist — get working launchers in your app menu.
+Pick apps in a terminal checklist - get working launchers in your app menu.
 Deselect an app and its launcher is removed.
 
 Every managed launcher runs outside the Mullvad VPN tunnel
@@ -65,18 +65,18 @@ apps.yaml → scanner → picker → generator → manager → ~/.local/share/ap
                              │                 state.json (memory)
 ```
 
-- **Scanner** (`desktop_manager/scanner.py`) — finds executables in
+- **Scanner** (`desktop_manager/scanner.py`) - finds executables in
   `path_dirs` (flat) and `extra_dirs` (recursive, depth-limited), plus
   `flatpak` and `snap`. Filters noise with `excludes`, an extension
   blocklist, and magic-byte checks, so only real binaries and scripts pass.
-- **Generator** (`desktop_manager/generator.py`) — builds the `.desktop`
+- **Generator** (`desktop_manager/generator.py`) - builds the `.desktop`
   text: `mullvad-exclude` prefix, `(Excluded)` suffix, safe filenames
   (`google-chrome.desktop`), quoting for paths with spaces.
-- **Manager** (`desktop_manager/manager.py`) — writes/deletes the files,
+- **Manager** (`desktop_manager/manager.py`) - writes/deletes the files,
   refreshes the desktop database, validates the result.
-- **State** — maps `app_id → filename` so deselect finds the right file.
+- **State** - maps `app_id → filename` so deselect finds the right file.
   Stored at `~/.local/share/desktop-manager/state.json`.
-- **Config** — `~/.config/desktop-manager/apps.yaml` wins if present,
+- **Config** - `~/.config/desktop-manager/apps.yaml` wins if present,
   then the repo's `apps.yaml`, then built-in defaults. The installed
   command works out of the box anywhere.
 
@@ -85,7 +85,7 @@ apps.yaml → scanner → picker → generator → manager → ~/.local/share/ap
 - Only files carrying `X-Managed-By=met-desktop-manager` are ever deleted.
   Your existing launchers (e.g. `google-chrome.desktop` handmade earlier)
   always survive.
-- A name collision never overwrites — the new file gets a `-2` suffix.
+- A name collision never overwrites - the new file gets a `-2` suffix.
 
 ## Configure (`apps.yaml`)
 
@@ -107,7 +107,7 @@ picker). Re-add it if you ever want everything listed.
 .venv/bin/python -m pytest tests/ -q   # 39 tests, tmp dirs only
 ```
 
-The suite never touches the real applications dir or real state —
+The suite never touches the real applications dir or real state -
 everything runs in pytest `tmp_path`. Generated files are additionally
 checked with `desktop-file-validate` where available.
 
