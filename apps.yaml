@@ -7,7 +7,6 @@
 path_dirs:
   - ~/.local/bin
   - /usr/local/bin
-  - /opt/jadx/bin
 
 # Extra directories to search recursively for main binaries (depth-limited)
 extra_dirs:
@@ -17,6 +16,12 @@ extra_dirs:
   - ~/.local/bin
 
 max_depth: 3
+
+# Harvest Exec= paths from installed .desktop launchers (curated by
+# package maintainers). This is how distro-installed apps like VSCodium
+# show up without listing their directories explicitly.
+desktop_files:
+  enabled: true
 
 # Package managers
 flatpak:
