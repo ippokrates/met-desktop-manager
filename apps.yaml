@@ -1,0 +1,41 @@
+# Scanner config — defaults reflect the author's machine; adjust to yours.
+# `~` and $VARS are expanded. Used by scanner.py.
+
+# Directories from $PATH to scan for executables (non-recursive, executable bit).
+# NOTE: /usr/bin (2500+ CLI tools) is intentionally excluded — re-add it here
+# if you ever want every system binary listed (TUI becomes unusable).
+path_dirs:
+  - ~/.local/bin
+  - /usr/local/bin
+  - /opt/jadx/bin
+
+# Extra directories to search recursively for main binaries (depth-limited)
+extra_dirs:
+  - /opt
+  - ~/Downloads
+  - ~/Applications
+  - ~/.local/bin
+
+max_depth: 3
+
+# Package managers
+flatpak:
+  enabled: true
+snap:
+  enabled: true
+
+# Basenames / substrings to ignore (noisy helpers, uninstallers, etc.)
+excludes:
+  - uninstall
+  - uninstaller
+  - install.sh
+  - chrome-sandbox
+  - crashpad
+  - fsnotifier
+  - abicheck
+  - "*.so*"
+  - "*.jar"
+  - "*.img"
+  - "*.iso"
+
+target_dir: ~/.local/share/applications

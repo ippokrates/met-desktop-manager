@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "met-desktop-manager"
+version = "0.1.0"
+description = "Terminal tool to manage .desktop launcher files"
+requires-python = ">=3.12"
+dependencies = [
+    "questionary>=2.0",
+    "rich>=13.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+desktop-manager = "desktop_manager.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["desktop_manager*"]

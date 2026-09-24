@@ -1,0 +1,221 @@
+"""Create/delete/sync .desktop files in the target applications dir.
+
+Safety model:
+  - Every file we create carries `X-Managed-By=met-desktop-manager`.
+  - `state.json` maps app_id -> filename so deselect finds the file.
+  - We NEVER touch files without the marker (pre-existing launchers like
+    vesktop.desktop are safe), even if the name collides — we pick `-2`.
+"""
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+from pathlib import Path
+from typing import Mapping
+
+from . import generator
+
+TARGET_DIR = Path.home() / ".local" / "share" / "applications"
+LEGACY_STATE_FILE = Path(__file__).resolve().parent.parent / "state.json"
+
+
+def _default_state_file() -> Path:
+    """Per-user state location, working for repo dev and pipx installs.
+
+    Prefers the XDG data dir (~/.local/share/desktop-manager/state.json).
+    Falls back to the repo-adjacent state.json only if it already holds
+    real entries (so pre-existing installs don't orphan their files).
+    """
+    xdg_base = os.environ.get("XDG_DATA_HOME", "")
+    base = Path(xdg_base) if xdg_base else Path.home() / ".local" / "share"
+    xdg = base / "desktop-manager" / "state.json"
+    if xdg.exists():
+        return xdg
+    try:
+        if (LEGACY_STATE_FILE.exists()
+                and json.loads(LEGACY_STATE_FILE.read_text()) not in ({}, [])):
+            return LEGACY_STATE_FILE
+    except (OSError, ValueError):
+        pass
+    return xdg
+
+
+STATE_FILE = _default_state_file()
+
+
+def load_state(state_file: Path | None = None) -> dict:
+    state_file = state_file or STATE_FILE
+    try:
+        return json.loads(Path(state_file).read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(state: dict, state_file: Path | None = None) -> None:
+    state_file = state_file or STATE_FILE
+    p = Path(state_file)
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    p.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
+
+
+def _is_managed_file(path: Path) -> bool:
+    try:
+        return generator.is_managed_content(path.read_text(errors="ignore"))
+    except OSError:
+        return False
+
+
+def _app_fields(app) -> tuple[str, str, str]:
+    """Accept DiscoveredApp or plain mapping -> (name, exec_path, icon)."""
+    if isinstance(app, Mapping):
+        return (
+            str(app.get("name", "")),
+            str(app.get("exec_path", "")),
+            str(app.get("icon_hint", app.get("icon", ""))),
+        )
+    return (
+        str(getattr(app, "name", "")),
+        str(getattr(app, "exec_path", "")),
+        str(getattr(app, "icon_hint", "") or getattr(app, "icon", "")),
+    )
+
+
+def create_desktop(app, target_dir: Path | None = None,
+                   state_file: Path | None = None) -> Path:
+    """Create (or refresh) the .desktop file for one app. Returns its path."""
+    name, exec_path, icon = _app_fields(app)
+    content = generator.build_desktop_content(name, exec_path, icon=icon)
+
+    target_dir = Path(target_dir).expanduser() if target_dir else TARGET_DIR
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    state = load_state(state_file)
+    app_id = app.get("id", name) if isinstance(app, Mapping) else (
+        getattr(app, "id", name))
+
+    # Reuse our previous file for this app if it still exists.
+    existing = state.get(app_id)
+    if existing and (target_dir / existing).is_file():
+        dest = target_dir / existing
+    else:
+        dest = target_dir / generator.unique_filename(target_dir, name)
+
+    dest.write_text(content)
+    try:
+        dest.chmod(0o644)
+    except OSError:
+        pass
+
+    state[app_id] = dest.name
+    save_state(state, state_file)
+    _refresh_desktop_db(target_dir)
+    return dest
+
+
+def remove_desktop(app_id: str, target_dir: Path | None = None,
+                   state_file: Path | None = None) -> bool:
+    """Delete our managed file for app_id. Returns True if something was removed."""
+    target_dir = Path(target_dir).expanduser() if target_dir else TARGET_DIR
+    state = load_state(state_file)
+    removed = False
+    filename = state.pop(app_id, None)
+    if filename and (target_dir / filename).is_file():
+        if _is_managed_file(target_dir / filename):
+            (target_dir / filename).unlink()
+            removed = True
+    save_state(state, state_file)
+    if removed:
+        _refresh_desktop_db(target_dir)
+    return removed
+
+
+def sync(selected: Mapping, target_dir: Path | None = None,
+         state_file: Path | None = None) -> dict:
+    """Reconcile target_dir with the selected apps.
+
+    `selected`: mapping of app_id -> DiscoveredApp (or plain dict).
+    Returns {'created': [...], 'removed': [...]} (filenames).
+    """
+    target_dir = Path(target_dir).expanduser() if target_dir else TARGET_DIR
+    target_dir.mkdir(parents=True, exist_ok=True)
+    state = load_state(state_file)
+
+    created, removed = [], []
+    wanted = set(selected.keys())
+
+    for app_id, app in selected.items():
+        name, exec_path, icon = _app_fields(app)
+        content = generator.build_desktop_content(name, exec_path, icon=icon)
+        filename = state.get(app_id)
+        dest = (target_dir / filename) if filename else None
+        if dest and dest.is_file() and _is_managed_file(dest):
+            if dest.read_text(errors="ignore") != content:
+                dest.write_text(content)
+                created.append(dest.name)
+        else:
+            dest = target_dir / generator.unique_filename(target_dir, name)
+            dest.write_text(content)
+            try:
+                dest.chmod(0o644)
+            except OSError:
+                pass
+            state[app_id] = dest.name
+            created.append(dest.name)
+
+    # Remove managed files that are no longer selected.
+    for app_id in [k for k in state if k not in wanted]:
+        filename = state.pop(app_id)
+        candidate = target_dir / filename
+        if candidate.is_file() and _is_managed_file(candidate):
+            candidate.unlink()
+            removed.append(filename)
+    # Belt & braces: any managed file on disk unknown to state and not
+    # just created is orphaned -> remove it too.
+    known_files = set(state.values())
+    for child in target_dir.glob("*.desktop"):
+        if child.name not in known_files and _is_managed_file(child):
+            child.unlink()
+            removed.append(child.name)
+
+    save_state(state, state_file)
+    if created or removed:
+        _refresh_desktop_db(target_dir)
+    return {"created": created, "removed": removed}
+
+
+def managed_files(target_dir: Path | None = None) -> list[Path]:
+    """List all files in target_dir carrying our managed marker."""
+    target_dir = Path(target_dir).expanduser() if target_dir else TARGET_DIR
+    if not target_dir.is_dir():
+        return []
+    return [p for p in target_dir.glob("*.desktop") if _is_managed_file(p)]
+
+
+def _refresh_desktop_db(target_dir: Path) -> None:
+    updater = shutil.which("update-desktop-database")
+    if updater is None:
+        return
+    try:
+        subprocess.run([updater, str(target_dir)],
+                       capture_output=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def validate_desktop_file(path: Path) -> tuple[bool, str]:
+    """Run desktop-file-validate if available. Returns (ok, message)."""
+    tool = shutil.which("desktop-file-validate")
+    if tool is None:
+        return True, "desktop-file-validate not installed, skipped"
+    try:
+        out = subprocess.run([tool, str(path)],
+                             capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, str(e)
+    ok = out.returncode == 0
+    return ok, (out.stdout + out.stderr).strip() or "valid"
