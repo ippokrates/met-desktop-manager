@@ -95,6 +95,34 @@ def test_sync_vanished_reports_kept_when_binary_still_there(dirs, tmp_path):
     assert res["vanished"][0]["binary_exists"] is True
 
 
+def test_create_reuses_source_desktop_to_shadow(dirs):
+    target, state = dirs
+    app = dict(_app("desktop:shaded", "Shaded", "/opt/shaded/bin", ""),
+               source_desktop="shaded.desktop")
+    dest = manager.create_desktop(app, target, state)
+    assert dest.name == "shaded.desktop"
+    assert generator.is_managed_content(dest.read_text())
+
+
+def test_create_never_overwrites_handmade_shadow_name(dirs):
+    target, state = dirs
+    handmade = target / "shaded.desktop"
+    handmade.write_text("[Desktop Entry]\nName=Mine\nExec=/mine\nType=Application\n")
+    app = dict(_app("desktop:shaded", "Shaded", "/opt/shaded/bin", ""),
+               source_desktop="shaded.desktop")
+    dest = manager.create_desktop(app, target, state)
+    assert dest.name == "shaded-2.desktop"
+    assert handmade.read_text().startswith("[Desktop Entry]\nName=Mine")
+
+
+def test_app_source_desktop_rejects_unsafe():
+    assert manager._app_source_desktop({"source_desktop": "../evil.desktop"}) == ""
+    assert manager._app_source_desktop({"source_desktop": "sub/dir.desktop"}) == ""
+    assert manager._app_source_desktop({"source_desktop": "plainname"}) == ""
+    assert manager._app_source_desktop({"source_desktop": "ok-name.desktop"}) == "ok-name.desktop"
+    assert manager._app_source_desktop({}) == ""
+
+
 def test_sync_vanished_pruned_on_request(dirs):
     target, state = dirs
     manager.create_desktop(_app(), target, state)

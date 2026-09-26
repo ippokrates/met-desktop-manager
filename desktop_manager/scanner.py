@@ -73,6 +73,7 @@ class DiscoveredApp:
     exec_path: str
     icon_hint: str = ""
     source: str = ""
+    source_desktop: str = ""  # original launcher basename (desktop: apps only)
 
 
 def load_config(path: str | Path | None = None) -> dict:
@@ -524,6 +525,7 @@ def scan_desktop_files(desktop_dirs: list[str] | None = None,
                     exec_path=resolved,
                     icon_hint=icon or _find_icon_hint(Path(resolved)),
                     source=f"desktop:{d}",
+                    source_desktop=f.name,
                 )
                 prev = best.get(resolved)
                 if prev is None or (nargs, f.name) < (prev[0], prev[1]):

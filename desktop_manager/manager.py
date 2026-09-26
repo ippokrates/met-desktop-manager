@@ -140,6 +140,38 @@ def _app_fields(app) -> tuple[str, str, str]:
     )
 
 
+def _app_source_desktop(app) -> str:
+    """Original launcher basename for shadowing (desktop: apps only, else "")."""
+    raw = app.get("source_desktop", "") if isinstance(app, Mapping) else (
+        getattr(app, "source_desktop", "") or "")
+    raw = str(raw or "").strip()
+    if not raw or not raw.endswith(".desktop"):
+        return ""
+    base = Path(raw).name
+    if base != raw or base == ".desktop" or ".." in base:
+        return ""
+    return base
+
+
+def _new_managed_dest(target_dir: Path, name: str, source_desktop: str) -> Path:
+    """Safe new path: shadow the original basename when possible.
+
+    Uses `source_desktop` (e.g. codium.desktop) so ours shadows the system
+    launcher instead of duplicating it. Falls back to a `-2` slug when the
+    name is taken by an unmanaged (handmade) file — never overwrites those.
+    """
+    if source_desktop:
+        candidate = target_dir / source_desktop
+        try:
+            if not candidate.exists():
+                return candidate
+            if candidate.is_file() and _is_managed_file(candidate):
+                return candidate
+        except OSError:
+            pass
+    return target_dir / generator.unique_filename(target_dir, name)
+
+
 def create_desktop(app, target_dir: Path | None = None,
                    state_file: Path | None = None) -> Path:
     """Create (or refresh) the .desktop file for one app. Returns its path."""
@@ -158,7 +190,7 @@ def create_desktop(app, target_dir: Path | None = None,
     if existing and (target_dir / existing).is_file():
         dest = target_dir / existing
     else:
-        dest = target_dir / generator.unique_filename(target_dir, name)
+        dest = _new_managed_dest(target_dir, name, _app_source_desktop(app))
 
     dest.write_text(content)
     try:
@@ -240,7 +272,7 @@ def sync(selected: Mapping, target_dir: Path | None = None,
                 dest.write_text(content)
                 created.append(dest.name)
         else:
-            dest = target_dir / generator.unique_filename(target_dir, name)
+            dest = _new_managed_dest(target_dir, name, _app_source_desktop(app))
             dest.write_text(content)
             try:
                 dest.chmod(0o644)

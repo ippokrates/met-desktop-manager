@@ -262,3 +262,20 @@ def test_binary_exists_bare_name_via_path(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", str(tmp_path), prepend=os.pathsep)
     assert s.binary_exists("pathbin") is True
     assert s.binary_exists("definitely-not-here-xyz") is False
+
+
+def test_scan_desktop_files_harvests_source_desktop(tmp_path):
+    from pathlib import Path
+    appdir = tmp_path / "applications"
+    appdir.mkdir()
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    _exe(bindir / "shaded")
+    (appdir / "shaded.desktop").write_text(
+        "[Desktop Entry]\nName=Shaded\nExec=" + str(bindir / "shaded") + "\n")
+    apps = s.scan_desktop_files([str(appdir)], excludes=[])
+    assert len(apps) == 1
+    assert apps[0].source_desktop == "shaded.desktop"
+    # plain binaries have no original to shadow
+    assert s.DiscoveredApp(id="x", name="X",
+                           exec_path="/opt/x").source_desktop == ""
