@@ -17,9 +17,40 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _group_console():
+    """Rich console for headers, or None when rich is missing."""
+    try:
+        from rich.console import Console
+        return Console()
+    except ImportError:
+        return None
+
+
+def _print_group_header(group_key: str, count: int, console=None) -> None:
+    """One-line header: bold folder name + dimmed full path + count.
+
+    Example: `  Vesktop  /opt/Vesktop  (1 app)`
+    Plain print fallback when rich is unavailable (pipes/SSH).
+    """
+    from .scanner import group_base_name, short_group_path
+
+    base = group_base_name(group_key)
+    short = short_group_path(group_key)
+    noun = "app" if count == 1 else "apps"
+    if console is None:
+        print(f"  {base}  {short}  ({count} {noun})")
+        return
+    try:
+        from rich.markup import escape
+        console.print(f"  [bold]{escape(base)}[/bold] "
+                      f"[dim]{escape(short)} ({count} {noun})[/dim]")
+    except Exception:
+        print(f"  {base}  {short}  ({count} {noun})")
+
+
 def main() -> None:
     from . import manager
-    from .scanner import load_config, scan
+    from .scanner import group_by_directory, load_config, scan
 
     parser = build_parser()
     args = parser.parse_args()
@@ -28,9 +59,12 @@ def main() -> None:
         if not apps:
             print("No apps discovered. Check apps.yaml paths.")
             return
-        for app in apps:
-            icon = f" [{app.icon_hint}]" if app.icon_hint else ""
-            print(f"- {app.name} | {app.exec_path}{icon} ({app.source})")
+        console = _group_console()
+        for group_key, g_apps in group_by_directory(apps).items():
+            _print_group_header(group_key, len(g_apps), console)
+            for app in g_apps:
+                icon = f" [{app.icon_hint}]" if app.icon_hint else ""
+                print(f"    - {app.name} | {app.exec_path}{icon} ({app.source})")
         print(f"\n{len(apps)} app(s) discovered.")
         return
     if args.create:
@@ -158,6 +192,8 @@ def _picker_tty(apps, state, preticked: set[str] | None = None) -> set[str] | No
 
     picked: set[str] = set(preticked) if preticked is not None else {
         a.id for a in apps if a.id in state}
+    from .scanner import group_base_name, group_key_for_app
+    base_for = {a.id: group_base_name(group_key_for_app(a)) for a in apps}
     while True:
         filt = questionary.text(
             "Filter apps (substring of name/path, Enter = show all):").ask()
@@ -169,9 +205,12 @@ def _picker_tty(apps, state, preticked: set[str] | None = None) -> set[str] | No
         if not candidates:
             print("No matches, try another filter.")
             continue
+        # Grouped order: folder name, then app name (visual grouping only).
+        candidates.sort(key=lambda a: (base_for.get(a.id, "").lower(),
+                                       a.name.lower()))
         print(f"{len(candidates)} match(es). Space toggles, Enter confirms.")
         choices = [
-            Choice(title=f"{a.name}  ({a.exec_path})",
+            Choice(title=f"[{base_for.get(a.id, '?')}] {a.name}  ({a.exec_path})",
                    value=a.id, checked=(a.id in picked))
             for a in candidates
         ]
@@ -188,12 +227,26 @@ def _picker_tty(apps, state, preticked: set[str] | None = None) -> set[str] | No
 
 
 def _picker_plain(apps, state, preticked: set[str] | None = None) -> set[str] | None:
-    """Stdlib fallback for non-TTY (pipes/SSH): numbered ranges like 1,3,5-9."""
+    """Stdlib fallback for non-TTY (pipes/SSH): numbered ranges like 1,3,5-9.
+
+    Visual grouping only: headers per directory, flat numbering underneath
+    so `1,3,5-9` keeps working. Number -> app mapping follows the grouped
+    order (folder name, then app name).
+    """
+    from .scanner import group_by_directory
+
     ticked = set(preticked) if preticked is not None else {
         a.id for a in apps if a.id in state}
-    for i, a in enumerate(apps, 1):
-        mark = "x" if a.id in ticked else " "
-        print(f"{i:4} [{mark}] {a.name} | {a.exec_path}")
+    groups = group_by_directory(apps)
+    ordered = [a for g_apps in groups.values() for a in g_apps]
+    console = _group_console()
+    n = 0
+    for group_key, g_apps in groups.items():
+        _print_group_header(group_key, len(g_apps), console)
+        for a in g_apps:
+            n += 1
+            mark = "x" if a.id in ticked else " "
+            print(f"    {n:4} [{mark}] {a.name} | {a.exec_path}")
     try:
         raw = input("Enter numbers/ranges (e.g. 1,3,5-9), empty = none: ").strip()
     except (EOFError, KeyboardInterrupt):
@@ -206,16 +259,16 @@ def _picker_plain(apps, state, preticked: set[str] | None = None) -> set[str] | 
         if "-" in part:
             try:
                 lo, hi = part.split("-", 1)
-                for n in range(int(lo), int(hi) + 1):
-                    if 1 <= n <= len(apps):
-                        picked.add(apps[n - 1].id)
+                for num in range(int(lo), int(hi) + 1):
+                    if 1 <= num <= len(ordered):
+                        picked.add(ordered[num - 1].id)
             except ValueError:
                 print(f"Ignoring invalid range: {part}")
         else:
             try:
-                n = int(part)
-                if 1 <= n <= len(apps):
-                    picked.add(apps[n - 1].id)
+                num = int(part)
+                if 1 <= num <= len(ordered):
+                    picked.add(ordered[num - 1].id)
                 else:
                     print(f"Ignoring out-of-range: {part}")
             except ValueError:

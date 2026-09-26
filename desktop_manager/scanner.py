@@ -587,6 +587,67 @@ def scan(config: dict | None = None) -> list[DiscoveredApp]:
     return unique
 
 
+def group_key_for_app(app: DiscoveredApp) -> str:
+    """Folder bucket for visual grouping (display only, IDs unchanged).
+
+    Real binaries group by their parent directory; package-manager
+    shims without a real path (flatpak/snap) group by source label.
+    """
+    source = (app.source or "").strip()
+    if source in ("flatpak", "snap"):
+        return source
+    exec_path = (app.exec_path or "").strip()
+    if not exec_path:
+        return source or "other"
+    try:
+        tokens = shlex.split(exec_path)
+    except ValueError:
+        tokens = [exec_path]
+    first = tokens[0] if tokens else ""
+    if not first:
+        return source or "other"
+    if first == "flatpak":
+        return "flatpak"
+    if not os.path.isabs(first):
+        return source or first or "other"
+    return str(Path(first).parent)
+
+
+def short_group_path(key: str) -> str:
+    """`~`-shortened group label for display (`/home/you/.local/bin` -> `~/.local/bin`)."""
+    if not key or not os.path.isabs(key):
+        return key
+    try:
+        home = str(Path.home())
+        if key == home or key.startswith(home + os.sep):
+            return "~" + key[len(home):]
+    except Exception:
+        pass
+    return key
+
+
+def group_base_name(key: str) -> str:
+    """Bold part of the header: last folder (`/opt/Vesktop` -> `Vesktop`)."""
+    if not key:
+        return "other"
+    if os.path.isabs(key):
+        return Path(key).name or key
+    return key
+
+
+def group_by_directory(apps: list[DiscoveredApp]) -> dict[str, list[DiscoveredApp]]:
+    """Group apps by directory for display. Returns groups sorted by
+    folder name; apps inside keep their input order (scan() already
+    returns them name-sorted). View-only: IDs/order of the input
+    list are not mutated."""
+    groups: dict[str, list[DiscoveredApp]] = {}
+    for app in apps or []:
+        groups.setdefault(group_key_for_app(app), []).append(app)
+    ordered = sorted(groups.items(),
+                     key=lambda kv: (group_base_name(kv[0]).lower(), kv[0].lower()))
+    return dict(ordered)
+
+
 def load_existing_execs(dirs: list[str | Path] | None = None) -> set[str]:
     """Parse Exec= lines from existing .desktop files (for future filtering)."""
     if dirs is None:

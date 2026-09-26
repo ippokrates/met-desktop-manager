@@ -215,3 +215,33 @@ def test_scan_desktop_files_skips(tmp_path):
     assert [a.name for a in apps] == ["Ok"]
     # excludes apply to harvested binaries too
     assert s.scan_desktop_files([str(appdir)], excludes=["okapp"]) == []
+
+
+def test_group_by_directory_buckets():
+    from desktop_manager.scanner import DiscoveredApp
+    apps = [
+        DiscoveredApp(id="a", name="Vesktop", exec_path="/opt/Vesktop/vesktop",
+                      source="SCAN:/opt"),
+        DiscoveredApp(id="b", name="Tool", exec_path="/home/u/.local/bin/tool",
+                      source="PATH:/home/u/.local/bin"),
+        DiscoveredApp(id="c", name="Spot", exec_path="flatpak run com.spot.App",
+                      source="flatpak"),
+    ]
+    groups = s.group_by_directory(apps)
+    assert set(groups) == {"/opt/Vesktop", "/home/u/.local/bin", "flatpak"}
+    assert [a.id for a in groups["/opt/Vesktop"]] == ["a"]
+    # groups sorted by folder base name
+    assert list(groups) == sorted(groups,
+                                  key=lambda k: s.group_base_name(k).lower())
+
+
+def test_group_helpers_labels_and_home(tmp_path, monkeypatch):
+    from desktop_manager.scanner import DiscoveredApp
+    flat = DiscoveredApp(id="f", name="Spot", exec_path="flatpak run x", source="flatpak")
+    assert s.group_key_for_app(flat) == "flatpak"
+    snap = DiscoveredApp(id="p", name="S", exec_path="/snap/bin/s", source="snap")
+    assert s.group_key_for_app(snap) == "snap"
+    assert s.group_base_name("/opt/Vesktop") == "Vesktop"
+    assert s.group_base_name("flatpak") == "flatpak"
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert s.short_group_path(str(tmp_path / ".local" / "bin")) == "~/.local/bin"

@@ -28,6 +28,23 @@ def test_picker_plain_ranges(capsys, monkeypatch):
     monkeypatch.setattr(sys, "stdin", io.StringIO("1,3\n"))
     picked = _picker_plain(_fake_apps(), {})
     assert picked == {"a1", "a3"}
+    out = capsys.readouterr().out
+    # one-line grouped header: bold name + dimmed path + count
+    assert "bin" in out and "(3 apps)" in out
+
+
+def test_picker_plain_grouped_numbering_follows_groups(capsys, monkeypatch):
+    """Two dirs -> headers per dir, flat numbers underneath still work."""
+    apps = [
+        DiscoveredApp(id="b1", name="B Tool", exec_path="/opt/bdir/btool"),
+        DiscoveredApp(id="a1", name="A Tool", exec_path="/home/u/.local/bin/atool"),
+    ]
+    monkeypatch.setattr(sys, "stdin", io.StringIO("2\n"))
+    picked = _picker_plain(apps, {})
+    out = capsys.readouterr().out
+    # groups sorted by folder base ("bdir" < "bin"), so 1=b1, 2=a1
+    assert picked == {"a1"}
+    assert "bdir" in out and "bin" in out
 
 
 def test_picker_plain_range_syntax_and_invalid(capsys, monkeypatch):
