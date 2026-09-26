@@ -6,3 +6,4 @@ build/
 *.egg-info/
 state.json
 met-todo
+INTERNAL.md
