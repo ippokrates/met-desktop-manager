@@ -72,6 +72,22 @@ def _print_vanished(vanished: list[dict], kept_label: str) -> None:
             print(f"  - {v['filename']} ({v['binary'] or 'unknown binary'})")
 
 
+def _needs_chmod(app) -> bool:
+    """True when an app is an .AppImage found without the exec bit."""
+    if isinstance(app, dict):
+        return bool(app.get("needs_chmod", False))
+    return bool(getattr(app, "needs_chmod", False))
+
+
+def _chmod_tag(app) -> str:
+    return " [needs chmod +x]" if _needs_chmod(app) else ""
+
+
+def _print_made_executable(result: dict) -> None:
+    for fixed in result.get("made_executable", []) or []:
+        print(f"made executable: {fixed}")
+
+
 def main() -> None:
     from . import manager
     from .scanner import group_by_directory, load_config, scan
@@ -88,17 +104,21 @@ def main() -> None:
             _print_group_header(group_key, len(g_apps), console)
             for app in g_apps:
                 icon = f" [{app.icon_hint}]" if app.icon_hint else ""
-                print(f"    - {app.name} | {app.exec_path}{icon} ({app.source})")
+                print(f"    - {app.name}{_chmod_tag(app)} | "
+                      f"{app.exec_path}{icon} ({app.source})")
         print(f"\n{len(apps)} app(s) discovered.")
         return
     if args.create:
         if not args.exec_path:
             parser.error("--create NAME requires --exec PATH")
+        fixed = manager._ensure_executable(args.exec_path)
         dest = manager.create_desktop(
             {"id": args.create.lower(), "name": args.create,
              "exec_path": args.exec_path, "icon": args.icon})
         ok, msg = manager.validate_desktop_file(dest)
         print(f"Created {dest} (valid={ok}: {msg})")
+        if fixed:
+            print(f"made executable: {fixed}")
         return
     if args.sync:
         apps = scan(load_config())
@@ -109,6 +129,7 @@ def main() -> None:
         result = manager.sync(selected, discovered={a.id: a for a in apps})
         print(f"Synced: {len(result['created'])} created/updated, "
               f"{len(result['removed'])} removed.")
+        _print_made_executable(result)
         if result["vanished"]:
             _print_vanished(result["vanished"],
                             "Kept, no longer discovered (not deleted):")
@@ -232,7 +253,8 @@ def _picker_tty(apps, state, preticked: set[str] | None = None) -> set[str] | No
                                        a.name.lower()))
         print(f"{len(candidates)} match(es). Space toggles, Enter confirms.")
         choices = [
-            Choice(title=f"[{base_for.get(a.id, '?')}] {a.name}  ({a.exec_path})",
+            Choice(title=f"[{base_for.get(a.id, '?')}] {a.name}{_chmod_tag(a)}  "
+                         f"({a.exec_path})",
                    value=a.id, checked=(a.id in picked))
             for a in candidates
         ]
@@ -268,7 +290,7 @@ def _picker_plain(apps, state, preticked: set[str] | None = None) -> set[str] | 
         for a in g_apps:
             n += 1
             mark = "x" if a.id in ticked else " "
-            print(f"    {n:4} [{mark}] {a.name} | {a.exec_path}")
+            print(f"    {n:4} [{mark}] {a.name}{_chmod_tag(a)} | {a.exec_path}")
     try:
         raw = input("Enter numbers/ranges (e.g. 1,3,5-9), empty = none: ").strip()
     except (EOFError, KeyboardInterrupt):
@@ -302,6 +324,7 @@ def _print_summary(result: dict, manager, target_dir) -> None:
     created, removed = result["created"], result["removed"]
     adopted = result.get("adopted", {})
     vanished = result.get("vanished", [])
+    _print_made_executable(result)
     if not created and not removed and not adopted and not vanished:
         print("Already in sync, nothing changed.")
         return

@@ -123,6 +123,54 @@ def test_app_source_desktop_rejects_unsafe():
     assert manager._app_source_desktop({}) == ""
 
 
+def test_ensure_executable_fixes_appimage(tmp_path):
+    import os
+    import stat
+    target = tmp_path / "Tool.AppImage"
+    target.write_bytes(b"\x7fELF" + b"\x00" * 60)
+    target.chmod(0o644)
+    assert manager._ensure_executable(str(target)) == str(target)
+    mode = target.stat().st_mode
+    assert mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+
+def test_ensure_executable_leaves_others_alone(tmp_path):
+    import stat
+    good = tmp_path / "Good.AppImage"
+    good.write_bytes(b"\x7fELF" + b"\x00" * 60)
+    good.chmod(good.stat().st_mode | stat.S_IXUSR)
+    assert manager._ensure_executable(str(good)) == ""  # already executable
+    plain = tmp_path / "script.sh"
+    plain.write_bytes(b"#!/bin/sh\n")
+    plain.chmod(0o644)
+    assert manager._ensure_executable(str(plain)) == ""  # not an AppImage
+    assert manager._ensure_executable(str(tmp_path / "missing.AppImage")) == ""
+    assert manager._ensure_executable("") == ""
+
+
+def test_ensure_executable_failure_never_raises(tmp_path, monkeypatch):
+    target = tmp_path / "Tool.AppImage"
+    target.write_bytes(b"\x7fELF" + b"\x00" * 60)
+    target.chmod(0o644)
+    monkeypatch.setattr("pathlib.Path.chmod",
+                        lambda self, mode: (_ for _ in ()).throw(OSError("ro")))
+    assert manager._ensure_executable(str(target)) == ""
+
+
+def test_sync_fixes_appimage_exec_bit(dirs, tmp_path):
+    import os
+    target, state = dirs
+    app_file = tmp_path / "Cool.AppImage"
+    app_file.write_bytes(b"\x7fELF" + b"\x00" * 60)
+    app_file.chmod(0o644)
+    app = _app("file:cool", "Cool", str(app_file), "")
+    res = manager.sync({"file:cool": app}, target, state,
+                       discovered={"file:cool": app})
+    assert os.access(app_file, os.X_OK)
+    assert res["made_executable"] == [str(app_file)]
+    assert (target / "cool.desktop").exists()
+
+
 def test_sync_vanished_pruned_on_request(dirs):
     target, state = dirs
     manager.create_desktop(_app(), target, state)

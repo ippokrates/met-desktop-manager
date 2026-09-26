@@ -70,6 +70,27 @@ def test_print_vanished_labels(capsys):
     assert "Kept:" in out and "stay.desktop" in out
 
 
+def test_picker_plain_shows_chmod_tag(capsys, monkeypatch):
+    apps = [
+        DiscoveredApp(id="i1", name="Tool", exec_path="/home/u/dl/Tool.AppImage",
+                      needs_chmod=True),
+        DiscoveredApp(id="i2", name="Fine", exec_path="/bin/fine"),
+    ]
+    monkeypatch.setattr(sys, "stdin", io.StringIO("\n"))
+    assert _picker_plain(apps, {}) == set()
+    out = capsys.readouterr().out
+    assert "Tool [needs chmod +x]" in out
+    assert "Fine [needs chmod +x]" not in out
+
+
+def test_needs_chmod_accepts_dicts_and_objects():
+    from desktop_manager.__main__ import _needs_chmod
+    assert _needs_chmod({"needs_chmod": True}) is True
+    assert _needs_chmod({}) is False
+    assert _needs_chmod(DiscoveredApp(id="x", name="X", exec_path="/x",
+                                      needs_chmod=True)) is True
+
+
 def test_picker_plain_range_syntax_and_invalid(capsys, monkeypatch):
     monkeypatch.setattr(sys, "stdin", io.StringIO("1-2,99,zzz\n"))
     picked = _picker_plain(_fake_apps(), {})

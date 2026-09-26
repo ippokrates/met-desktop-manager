@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -86,6 +87,41 @@ def _iter_apps(apps) -> list:
     if isinstance(apps, Mapping):
         return list(apps.values())
     return list(apps)
+
+
+def _ensure_executable(exec_path: str) -> str:
+    """Add the exec bit to a non-executable .AppImage. Returns fixed path or "".
+
+    Only acts on files ending in `.AppImage` (case-insensitive) that exist
+    but lack any exec bit. Adds `x` for user/group/other, keeping read/write
+    as-is. Returns "" when nothing was done or on any error. Never raises,
+    so sync never fails because of a chmod problem.
+    """
+    value = (exec_path or "").strip()
+    if not value:
+        return ""
+    candidates = [value]
+    try:
+        parts = shlex.split(value)
+    except ValueError:
+        parts = []
+    if parts and parts[0] != value:
+        candidates.append(parts[0])
+    for cand in candidates:
+        p = Path(cand)
+        try:
+            if p.suffix.lower() != ".appimage":
+                continue
+            if not p.is_file():
+                continue
+            if os.access(p, os.X_OK):
+                return ""  # already executable, nothing fixed
+            mode = p.stat().st_mode
+            p.chmod(mode | 0o111)
+            return str(p)
+        except OSError:
+            return ""
+    return ""
 
 
 def find_orphaned(state: dict, selected: Mapping, target_dir,
@@ -176,6 +212,7 @@ def create_desktop(app, target_dir: Path | None = None,
                    state_file: Path | None = None) -> Path:
     """Create (or refresh) the .desktop file for one app. Returns its path."""
     name, exec_path, icon = _app_fields(app)
+    _ensure_executable(exec_path)
     content = generator.build_desktop_content(name, exec_path, icon=icon)
 
     target_dir = Path(target_dir).expanduser() if target_dir else TARGET_DIR
@@ -233,15 +270,18 @@ def sync(selected: Mapping, target_dir: Path | None = None,
       binary vanished are KEPT and reported, never silently deleted.
 
     Returns {'created': [...], 'removed': [...], 'adopted': {old: new},
-    'vanished': [{'app_id', 'filename', 'binary', 'binary_exists'}]}.
+    'vanished': [{'app_id', 'filename', 'binary', 'binary_exists'}],
+    'made_executable': [...]}.
     `binary_exists` tells a truly deleted program (safe to suggest removal)
-    from one that is merely unscanned.
+    from one that is merely unscanned. `made_executable` lists AppImage
+    paths that were given `+x` during this sync.
     """
     target_dir = Path(target_dir).expanduser() if target_dir else TARGET_DIR
     target_dir.mkdir(parents=True, exist_ok=True)
     state = load_state(state_file)
 
     created, removed, vanished = [], [], []
+    made_executable = []
     adopted = {}
     wanted = set(selected.keys())
     sel_by_key: dict[str, str] = {}
@@ -264,6 +304,9 @@ def sync(selected: Mapping, target_dir: Path | None = None,
 
     for app_id, app in selected.items():
         name, exec_path, icon = _app_fields(app)
+        fixed = _ensure_executable(exec_path)
+        if fixed and fixed not in made_executable:
+            made_executable.append(fixed)
         content = generator.build_desktop_content(name, exec_path, icon=icon)
         filename = state.get(app_id)
         dest = (target_dir / filename) if filename else None
@@ -318,7 +361,8 @@ def sync(selected: Mapping, target_dir: Path | None = None,
     if created or removed:
         _refresh_desktop_db(target_dir)
     return {"created": created, "removed": removed,
-            "adopted": adopted, "vanished": vanished}
+            "adopted": adopted, "vanished": vanished,
+            "made_executable": made_executable}
 
 
 def managed_files(target_dir: Path | None = None) -> list[Path]:

@@ -12,6 +12,14 @@ def _make_exe(path, magic=b"\x7fELF...."):
     return path
 
 
+def _make_plain(path, magic=b"\x7fELF...."):
+    """Write binary content without the exec bit (fresh-download state)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(magic + b"\x00" * 64)
+    path.chmod(0o644)
+    return path
+
+
 def test_is_excluded_substring_and_glob():
     assert s._is_excluded("my-uninstaller", ["uninstall"])
     assert s._is_excluded("libfoo.so.1", ["*.so*"])
@@ -262,6 +270,56 @@ def test_binary_exists_bare_name_via_path(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", str(tmp_path), prepend=os.pathsep)
     assert s.binary_exists("pathbin") is True
     assert s.binary_exists("definitely-not-here-xyz") is False
+
+
+def test_is_appimage_suffix():
+    from pathlib import Path
+    assert s._is_appimage(Path("Tool.AppImage")) is True
+    assert s._is_appimage(Path("tool.APPIMAGE")) is True
+    assert s._is_appimage(Path("tool.AppImage.part")) is False
+    assert s._is_appimage(Path("tool.sh")) is False
+    assert s._is_appimage(Path("tool")) is False
+
+
+def test_scan_extra_dirs_lists_appimage_without_exec_bit(tmp_path):
+    root = tmp_path / "dl"
+    plain = _make_plain(root / "CoolTool-1.2.AppImage")
+    apps = s.scan_extra_dirs([str(root)], max_depth=3, excludes=[])
+    by_exec = {a.exec_path: a for a in apps}
+    assert str(plain.resolve()) in by_exec
+    assert by_exec[str(plain.resolve())].needs_chmod is True
+
+
+def test_scan_extra_dirs_executable_appimage_not_flagged(tmp_path):
+    root = tmp_path / "dl"
+    good = _make_exe(root / "CoolTool-1.2.AppImage")
+    apps = s.scan_extra_dirs([str(root)], max_depth=3, excludes=[])
+    by_exec = {a.exec_path: a for a in apps}
+    assert by_exec[str(good.resolve())].needs_chmod is False
+
+
+def test_scan_extra_dirs_still_skips_plain_files_without_exec_bit(tmp_path):
+    root = tmp_path / "dl"
+    _make_plain(root / "somescript.run")
+    assert s.scan_extra_dirs([str(root)], max_depth=3, excludes=[]) == []
+
+
+def test_scan_extra_dirs_rejects_fake_appimage(tmp_path):
+    root = tmp_path / "dl"
+    fake = root / "Fake.AppImage"
+    fake.parent.mkdir(parents=True, exist_ok=True)
+    fake.write_text("not a binary")
+    fake.chmod(0o644)
+    assert s.scan_extra_dirs([str(root)], max_depth=3, excludes=[]) == []
+
+
+def test_scan_path_dirs_lists_appimage_without_exec_bit(tmp_path):
+    bindir = tmp_path / "bin"
+    plain = _make_plain(bindir / "Tool.AppImage")
+    apps = s.scan_path_dirs([str(bindir)], excludes=[])
+    by_exec = {a.exec_path: a for a in apps}
+    assert str(plain.resolve()) in by_exec
+    assert by_exec[str(plain.resolve())].needs_chmod is True
 
 
 def test_scan_desktop_files_harvests_source_desktop(tmp_path):

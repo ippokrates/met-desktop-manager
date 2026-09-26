@@ -4,7 +4,9 @@ Sources (per apps.yaml):
   1. desktop_files — Exec= paths harvested from installed .desktop
      launchers (curated by package maintainers, best metadata)
   2. path_dirs   — non-recursive, executable bit required
-  3. extra_dirs  — recursive, depth-limited (max_depth)
+     (except .AppImage files, which are listed anyway and flagged)
+  3. extra_dirs  — recursive, depth-limited (max_depth); same
+     .AppImage exception as path_dirs
   4. flatpak     — `flatpak list --app`
   5. snap        — `snap list` -> /snap/bin/<name>
 
@@ -74,6 +76,7 @@ class DiscoveredApp:
     icon_hint: str = ""
     source: str = ""
     source_desktop: str = ""  # original launcher basename (desktop: apps only)
+    needs_chmod: bool = False  # .AppImage found without the exec bit
 
 
 def load_config(path: str | Path | None = None) -> dict:
@@ -149,6 +152,17 @@ def _has_skip_ext(p: Path) -> bool:
     """True if the file (or any of its suffixes, e.g. .so.1) is a non-app type."""
     suffixes = [s.lower() for s in p.suffixes] or [p.suffix.lower()]
     return any(s in SKIP_EXTS or s.startswith(".so") for s in suffixes)
+
+
+def _is_appimage(p: Path | str) -> bool:
+    """True for `.AppImage` files (case-insensitive).
+
+    Only the final suffix counts, so `foo.AppImage.part` is not one.
+    """
+    try:
+        return Path(p).suffix.lower() == ".appimage"
+    except Exception:
+        return False
 
 
 def exec_key(exec_path: str) -> str:
@@ -319,7 +333,9 @@ def scan_path_dirs(path_dirs: list[str], excludes: list[str]) -> list[Discovered
                     continue
                 if _has_skip_ext(entry):
                     continue
-                if not os.access(entry, os.X_OK):
+                is_appimage = _is_appimage(entry.name)
+                executable = os.access(entry, os.X_OK)
+                if not executable and not is_appimage:
                     continue
                 resolved_path = entry.resolve()
                 if not _looks_executable(resolved_path):
@@ -334,6 +350,7 @@ def scan_path_dirs(path_dirs: list[str], excludes: list[str]) -> list[Discovered
                     exec_path=resolved,
                     icon_hint=_find_icon_hint(entry.resolve()),
                     source=f"PATH:{d}",
+                    needs_chmod=is_appimage and not executable,
                 ))
             except OSError:
                 continue
@@ -372,7 +389,9 @@ def scan_extra_dirs(extra_dirs: list[str], max_depth: int, excludes: list[str]) 
                         fp = Path(entry.path)
                         if _has_skip_ext(fp):
                             continue
-                        if not os.access(fp, os.X_OK):
+                        is_appimage = _is_appimage(fp.name)
+                        executable = os.access(fp, os.X_OK)
+                        if not executable and not is_appimage:
                             continue
                         resolved_fp = fp.resolve()
                         if not _looks_executable(resolved_fp):
@@ -385,6 +404,7 @@ def scan_extra_dirs(extra_dirs: list[str], max_depth: int, excludes: list[str]) 
                             exec_path=resolved,
                             icon_hint=_find_icon_hint(fp.resolve()),
                             source=f"SCAN:{root}",
+                            needs_chmod=is_appimage and not executable,
                         ))
                 except OSError:
                     continue
