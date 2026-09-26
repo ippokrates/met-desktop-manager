@@ -174,16 +174,7 @@ def exec_key(exec_path: str) -> str:
     via PATH. Multi-word commands (e.g. `flatpak run <id>`) normalize with
     their first token resolved, staying distinct per app.
     """
-    value = (exec_path or "").strip()
-    if not value:
-        return ""
-    if value.startswith("mullvad-exclude "):
-        value = value[len("mullvad-exclude "):].strip()
-    try:
-        tokens = shlex.split(value)
-    except ValueError:
-        return os.path.normpath(value)
-    tokens = [t for t in tokens if not FIELD_CODE_RE.fullmatch(t)]
+    tokens = _split_exec(exec_path)
     if not tokens:
         return ""
     first = tokens[0]
@@ -209,16 +200,7 @@ def binary_exists(exec_string: str) -> bool:
     absolute path -> is it still a file? `flatpak run <id>` -> is that
     flatpak installed? bare name -> is it on PATH? Never raises.
     """
-    value = (exec_string or "").strip()
-    if not value:
-        return False
-    if value.startswith("mullvad-exclude "):
-        value = value[len("mullvad-exclude "):].strip()
-    try:
-        tokens = shlex.split(value)
-    except ValueError:
-        return False
-    tokens = [t for t in tokens if not FIELD_CODE_RE.fullmatch(t)]
+    tokens = _split_exec(exec_string)
     if not tokens:
         return False
     first = tokens[0]
@@ -425,17 +407,33 @@ FIELD_CODE_RE = re.compile(r"%[fFuUdDnNickvm]")
 ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 
+def _split_exec(value: str, strip_wrapper: bool = True) -> list[str]:
+    """Split an Exec= line into clean tokens (shared parser).
+
+    Strips one `mullvad-exclude ` prefix when strip_wrapper is true, then
+    drops freedesktop field codes (%U and friends). Returns [] for empty
+    or unparseable input (unbalanced quotes). Never raises.
+
+    Only _clean_exec passes strip_wrapper=False: it never peeled the
+    wrapper, and it strips `env`/`VAR=` prefixes itself afterwards.
+    """
+    text = (value or "").strip()
+    if strip_wrapper and text.startswith("mullvad-exclude "):
+        text = text[len("mullvad-exclude "):].strip()
+    try:
+        tokens = shlex.split(text)
+    except ValueError:
+        return []
+    return [t for t in tokens if not FIELD_CODE_RE.fullmatch(t)]
+
+
 def _clean_exec(value: str) -> tuple[str, int]:
     """Split an Exec= line into (binary, extra_arg_count).
 
     Strips field codes, `env` prefixes and VAR= assignments.
     Returns ("", 0) when no usable binary remains.
     """
-    try:
-        tokens = shlex.split(value.strip())
-    except ValueError:
-        return "", 0
-    tokens = [t for t in tokens if not FIELD_CODE_RE.fullmatch(t)]
+    tokens = _split_exec(value, strip_wrapper=False)
     while tokens and tokens[0] == "env":
         tokens.pop(0)
     while tokens and ENV_ASSIGN_RE.match(tokens[0]) and "/" not in tokens[0]:

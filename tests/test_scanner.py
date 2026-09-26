@@ -265,6 +265,28 @@ def test_binary_exists_abs_and_missing(tmp_path):
     assert s.binary_exists("mullvad-exclude %U") is False
 
 
+def test_split_exec_shared_parser():
+    assert s._split_exec(
+        "mullvad-exclude /opt/google/chrome/google-chrome --new-window %U"
+    ) == ["/opt/google/chrome/google-chrome", "--new-window"]
+    # strip_wrapper=False keeps the wrapper as a plain word
+    assert s._split_exec(
+        "mullvad-exclude /opt/x %U", strip_wrapper=False
+    ) == ["mullvad-exclude", "/opt/x"]
+    # field codes dropped, env/VAR= left for _clean_exec to handle
+    assert s._split_exec("env FOO=1 myapp %u") == ["env", "FOO=1", "myapp"]
+    # empty and garbage both yield []
+    assert s._split_exec("") == []
+    assert s._split_exec("   ") == []
+    assert s._split_exec("mullvad-exclude %U") == []
+    assert s._split_exec('/opt/broken"quote') == []
+
+
+def test_exec_key_unparseable_is_unknown():
+    # Unbalanced quotes used to return a junk normpath key; now "".
+    assert s.exec_key('/opt/broken"quote') == ""
+
+
 def test_binary_exists_bare_name_via_path(tmp_path, monkeypatch):
     real = _make_exe(tmp_path / "pathbin")
     monkeypatch.setenv("PATH", str(tmp_path), prepend=os.pathsep)
