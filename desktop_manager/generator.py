@@ -25,6 +25,9 @@ def sanitize_filename(name: str) -> str:
 
     Rules: lowercase, spaces/underscores -> '-', keep [a-z0-9-],
     collapse repeats, fall back to 'app', cap stem at 64 chars.
+
+    Example:
+      "Google Chrome" -> "google-chrome.desktop"
     """
     slug = (name or "").strip().lower()
     slug = re.sub(r"[\s_]+", "-", slug)
@@ -43,6 +46,9 @@ def quote_exec(exec_path: str) -> str:
     - Absolute paths with spaces/tabs/quotes are double-quoted with
       interior backslashes/quotes escaped.
     - Already-quoted values are left alone.
+
+    Example:
+      "/opt/My App/run" -> '"/opt/My App/run"'
     """
     value = (exec_path or "").strip()
     if not value:
@@ -79,6 +85,11 @@ def quote_exec(exec_path: str) -> str:
 
 
 def _quote_word(word: str) -> str:
+    """Quote one word when it holds characters special to Exec lines.
+
+    Example:
+      "my app" -> '"my app"'
+    """
     if not re.search(r'[ \t\n"\'\\><~|&;$*?#()`]', word):
         return word
     return '"' + word.replace("\\", "\\\\").replace('"', '\\"') + '"'
@@ -130,6 +141,9 @@ def unique_filename(target_dir: Path, base: str) -> str:
     """Return a non-colliding filename in target_dir (`<slug>[-2].desktop`).
 
     Never overwrites an existing file (managed or not).
+
+    Example:
+      target already holds `a.desktop` -> "a-2.desktop"
     """
     candidate = sanitize_filename(base)
     stem = candidate[: -len(".desktop")]

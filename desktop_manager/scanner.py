@@ -173,6 +173,9 @@ def exec_key(exec_path: str) -> str:
     field codes, resolves absolute paths (symlinks included) and bare names
     via PATH. Multi-word commands (e.g. `flatpak run <id>`) normalize with
     their first token resolved, staying distinct per app.
+
+    Example:
+      "mullvad-exclude /opt/x/app %U" -> "/opt/x/app"
     """
     tokens = _split_exec(exec_path)
     if not tokens:
@@ -199,6 +202,10 @@ def binary_exists(exec_string: str) -> bool:
     Strips `mullvad-exclude`, field codes (%U) and args, then checks:
     absolute path -> is it still a file? `flatpak run <id>` -> is that
     flatpak installed? bare name -> is it on PATH? Never raises.
+
+    Examples:
+      "/opt/x/app" exists on disk -> True
+      "/gone/app" deleted -> False
     """
     tokens = _split_exec(exec_string)
     if not tokens:
@@ -240,7 +247,11 @@ VERSION_RE = re.compile(r"^v?\d+(\.\d+)+$|^\d+$|^(beta|alpha|rc)\.?[\d.]*$", re.
 
 
 def _pretty_name(stem: str) -> str:
-    """Turn `Glint-1.9.5` into `Glint`: drop versions + platform tokens."""
+    """Turn `Glint-1.9.5` into `Glint`: drop versions + platform tokens.
+
+    Example:
+      "session-desktop-linux-x86_64-1.18.1" -> "Session Desktop"
+    """
     tokens = re.split(r"[-_.\s]+", stem)
     kept = [t for t in tokens
             if t and t.lower() not in NOISE_TOKENS and not VERSION_RE.match(t)]
@@ -414,6 +425,9 @@ def _split_exec(value: str, strip_wrapper: bool = True) -> list[str]:
     drops freedesktop field codes (%U and friends). Returns [] for empty
     or unparseable input (unbalanced quotes). Never raises.
 
+    Example:
+      "mullvad-exclude /opt/x/app --flag %U" -> ["/opt/x/app", "--flag"]
+
     Only _clean_exec passes strip_wrapper=False: it never peeled the
     wrapper, and it strips `env`/`VAR=` prefixes itself afterwards.
     """
@@ -432,6 +446,9 @@ def _clean_exec(value: str) -> tuple[str, int]:
 
     Strips field codes, `env` prefixes and VAR= assignments.
     Returns ("", 0) when no usable binary remains.
+
+    Example:
+      "env FOO=1 myapp --flag %U" -> ("myapp", 1)
     """
     tokens = _split_exec(value, strip_wrapper=False)
     while tokens and tokens[0] == "env":

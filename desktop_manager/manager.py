@@ -73,7 +73,11 @@ def _is_managed_file(path: Path) -> bool:
 
 
 def managed_exec_key(path: Path) -> str:
-    """exec_key of a managed file's Exec= line ('' when unreadable)."""
+    """exec_key of a managed file's Exec= line ('' when unreadable).
+
+    Example:
+      file holding `Exec=mullvad-exclude /opt/x/app` -> "/opt/x/app"
+    """
     try:
         for line in Path(path).read_text(errors="ignore").splitlines():
             if line.startswith("Exec="):
@@ -96,6 +100,10 @@ def _ensure_executable(exec_path: str) -> str:
     but lack any exec bit. Adds `x` for user/group/other, keeping read/write
     as-is. Returns "" when nothing was done or on any error. Never raises,
     so sync never fails because of a chmod problem.
+
+    Example:
+      644 "Tool.AppImage" -> returns its path (mode becomes 755);
+      already-executable input -> "".
     """
     value = (exec_path or "").strip()
     if not value:
@@ -162,7 +170,11 @@ def find_orphaned(state: dict, selected: Mapping, target_dir,
 
 
 def _app_fields(app) -> tuple[str, str, str]:
-    """Accept DiscoveredApp or plain mapping -> (name, exec_path, icon)."""
+    """Accept DiscoveredApp or plain mapping -> (name, exec_path, icon).
+
+    Example:
+      {"name": "X", "exec_path": "/bin/x", "icon": "x"} -> ("X", "/bin/x", "x")
+    """
     if isinstance(app, Mapping):
         return (
             str(app.get("name", "")),
@@ -177,7 +189,12 @@ def _app_fields(app) -> tuple[str, str, str]:
 
 
 def _app_source_desktop(app) -> str:
-    """Original launcher basename for shadowing (desktop: apps only, else "")."""
+    """Original launcher basename for shadowing (desktop: apps only, else "").
+
+    Examples:
+      "codium.desktop" -> "codium.desktop"
+      "../evil.desktop" -> ""
+    """
     raw = app.get("source_desktop", "") if isinstance(app, Mapping) else (
         getattr(app, "source_desktop", "") or "")
     raw = str(raw or "").strip()
