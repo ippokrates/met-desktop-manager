@@ -57,6 +57,10 @@ Without pipx, prefix with the venv python:
 In non-terminal environments (pipes, SSH without TTY) the picker falls
 back to a numbered prompt accepting ranges like `1,3,5-9`.
 
+`--list` and the plain fallback group apps under one header line per
+folder. The TTY picker has no headers, it sorts by folder with a
+`[folder]` prefix on each row.
+
 ## How it works
 
 ```
@@ -89,13 +93,15 @@ apps.yaml → scanner → picker → generator → manager → ~/.local/share/ap
 - Only files carrying `X-Managed-By=met-desktop-manager` are ever deleted.
   Your existing launchers (e.g. `google-chrome.desktop` handmade earlier)
   always survive.
-- A name collision never overwrites - the new file gets a `-2` suffix.
+- System apps reuse the original file name, so only ours shows. The
+  original is untouched and comes back on untick. Handmade files still
+  get a `-2` suffix and are never overwritten.
 - Selections are matched by executable, not just ID: if discovery changes
   (e.g. an app moves from filesystem scan to launcher harvest), your
   selection is adopted, not deleted.
-- Apps that vanish from discovery are kept and reported, never silently
-  removed. Deleting them requires an explicit extra confirmation
-  (`--sync --all` refuses and exits nonzero instead).
+- Missing apps show as Broken when the program is gone and Kept when it
+  is still on disk. Deleting them requires an explicit extra confirmation
+  (`--sync --all` reports and exits nonzero instead).
 
 ## Configure (`apps.yaml`)
 
@@ -115,7 +121,7 @@ picker). Re-add it if you ever want everything listed.
 ## Test
 
 ```bash
-.venv/bin/python -m pytest tests/ -q   # 39 tests, tmp dirs only
+.venv/bin/python -m pytest tests/ -q   # 64 tests, tmp dirs only
 ```
 
 The suite never touches the real applications dir or real state -
