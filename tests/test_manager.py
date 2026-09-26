@@ -58,11 +58,41 @@ def test_sync_vanished_is_kept_by_default(dirs):
     res = manager.sync({}, target, state, discovered={})
     assert res["removed"] == []
     assert (target / "vesktop.desktop").exists()
-    assert res["vanished"] == [{"app_id": "file:vesktop",
-                                "filename": "vesktop.desktop",
-                                "binary": manager.managed_exec_key(
-                                    target / "vesktop.desktop")}]
+    assert len(res["vanished"]) == 1
+    v = res["vanished"][0]
+    assert v["app_id"] == "file:vesktop"
+    assert v["filename"] == "vesktop.desktop"
+    assert v["binary"] == manager.managed_exec_key(target / "vesktop.desktop")
+    assert isinstance(v["binary_exists"], bool)
     assert json.loads(state.read_text()) == {"file:vesktop": "vesktop.desktop"}
+
+
+def test_sync_vanished_reports_broken_when_binary_gone(dirs, tmp_path):
+    import stat
+    real = tmp_path / "gonebin"
+    real.write_bytes(b"\x7fELF" + b"\x00" * 60)
+    real.chmod(real.stat().st_mode | stat.S_IXUSR)
+    target, state = dirs
+    app = _app("file:gone", "Gone", str(real), "")
+    manager.create_desktop(app, target, state)
+    real.unlink()  # program deleted after launcher was created
+    res = manager.sync({}, target, state, discovered={})
+    assert (target / "gone.desktop").exists()  # still kept by default
+    assert res["vanished"][0]["binary_exists"] is False
+
+
+def test_sync_vanished_reports_kept_when_binary_still_there(dirs, tmp_path):
+    import stat
+    real = tmp_path / "staybin"
+    real.write_bytes(b"\x7fELF" + b"\x00" * 60)
+    real.chmod(real.stat().st_mode | stat.S_IXUSR)
+    target, state = dirs
+    app = _app("file:stay", "Stay", str(real), "")
+    manager.create_desktop(app, target, state)
+    # undiscovered (e.g. dir removed from apps.yaml) but file still on disk
+    res = manager.sync({}, target, state, discovered={})
+    assert (target / "stay.desktop").exists()
+    assert res["vanished"][0]["binary_exists"] is True
 
 
 def test_sync_vanished_pruned_on_request(dirs):

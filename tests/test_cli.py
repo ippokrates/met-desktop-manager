@@ -47,6 +47,29 @@ def test_picker_plain_grouped_numbering_follows_groups(capsys, monkeypatch):
     assert "bdir" in out and "bin" in out
 
 
+def test_split_vanished_broken_vs_kept():
+    from desktop_manager.__main__ import _split_vanished
+    vanished = [
+        {"filename": "gone.desktop", "binary": "/x/gone", "binary_exists": False},
+        {"filename": "stay.desktop", "binary": "/x/stay", "binary_exists": True},
+        {"filename": "old.desktop", "binary": "/x/old"},  # no flag -> safe kept
+    ]
+    broken, kept = _split_vanished(vanished)
+    assert [v["filename"] for v in broken] == ["gone.desktop"]
+    assert {v["filename"] for v in kept} == {"stay.desktop", "old.desktop"}
+
+
+def test_print_vanished_labels(capsys):
+    from desktop_manager.__main__ import _print_vanished
+    _print_vanished([
+        {"filename": "gone.desktop", "binary": "/x/gone", "binary_exists": False},
+        {"filename": "stay.desktop", "binary": "/x/stay", "binary_exists": True},
+    ], "Kept:")
+    out = capsys.readouterr().out
+    assert "Broken" in out and "gone.desktop" in out
+    assert "Kept:" in out and "stay.desktop" in out
+
+
 def test_picker_plain_range_syntax_and_invalid(capsys, monkeypatch):
     monkeypatch.setattr(sys, "stdin", io.StringIO("1-2,99,zzz\n"))
     picked = _picker_plain(_fake_apps(), {})

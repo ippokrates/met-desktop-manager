@@ -48,6 +48,30 @@ def _print_group_header(group_key: str, count: int, console=None) -> None:
         print(f"  {base}  {short}  ({count} {noun})")
 
 
+def _split_vanished(vanished: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Split kept entries into broken vs still-on-disk.
+
+    broken = binary truly missing (safe to suggest delete).
+    kept = binary still exists (likely a config/scan gap).
+    Entries without the new `binary_exists` flag default to kept (safe).
+    """
+    broken = [v for v in vanished if not v.get("binary_exists", True)]
+    kept = [v for v in vanished if v.get("binary_exists", True)]
+    return broken, kept
+
+
+def _print_vanished(vanished: list[dict], kept_label: str) -> None:
+    broken, kept = _split_vanished(vanished)
+    if broken:
+        print("Broken — program missing, safe to delete:")
+        for v in broken:
+            print(f"  - {v['filename']} ({v['binary'] or 'unknown binary'})")
+    if kept:
+        print(kept_label)
+        for v in kept:
+            print(f"  - {v['filename']} ({v['binary'] or 'unknown binary'})")
+
+
 def main() -> None:
     from . import manager
     from .scanner import group_by_directory, load_config, scan
@@ -86,9 +110,8 @@ def main() -> None:
         print(f"Synced: {len(result['created'])} created/updated, "
               f"{len(result['removed'])} removed.")
         if result["vanished"]:
-            print("Kept, no longer discovered (not deleted):")
-            for v in result["vanished"]:
-                print(f"  - {v['filename']} ({v['binary'] or 'unknown binary'})")
+            _print_vanished(result["vanished"],
+                            "Kept, no longer discovered (not deleted):")
             sys.exit(1)
         return
     interactive()
@@ -136,9 +159,8 @@ def interactive(target_dir=None, state_file=None) -> None:
           + (f" {len(vanished)} previously-managed no longer discovered"
              f" (kept, see below)." if vanished else ""))
     if vanished:
-        print("No longer discovered, will be KEPT (not deleted):")
-        for v in vanished:
-            print(f"  - {v['filename']} ({v['binary'] or 'unknown binary'})")
+        _print_vanished(vanished,
+                        "No longer discovered, will be KEPT (not deleted):")
     prune = False
     if sys.stdin.isatty():
         try:
@@ -147,7 +169,7 @@ def interactive(target_dir=None, state_file=None) -> None:
                 print("Cancelled, nothing changed.")
                 return
             if vanished and questionary.confirm(
-                    "Also DELETE the kept files above?", default=False).ask():
+                    "Also DELETE the broken/kept files above?", default=False).ask():
                 prune = True
         except ImportError:
             pass
@@ -285,7 +307,11 @@ def _print_summary(result: dict, manager, target_dir) -> None:
         return
     for old_id, new_id in adopted.items():
         print(f"adopted: {old_id} -> {new_id} (same app, new discovery ID)")
-    for v in vanished:
+    broken, kept = _split_vanished(vanished)
+    for v in broken:
+        print(f"broken (program missing, safe to delete): {v['filename']}"
+              f" ({v['binary'] or 'unknown binary'})")
+    for v in kept:
         print(f"kept (no longer discovered, not deleted): {v['filename']}"
               f" ({v['binary'] or 'unknown binary'})")
     try:

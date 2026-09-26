@@ -245,3 +245,20 @@ def test_group_helpers_labels_and_home(tmp_path, monkeypatch):
     assert s.group_base_name("flatpak") == "flatpak"
     monkeypatch.setenv("HOME", str(tmp_path))
     assert s.short_group_path(str(tmp_path / ".local" / "bin")) == "~/.local/bin"
+
+
+def test_binary_exists_abs_and_missing(tmp_path):
+    real = _make_exe(tmp_path / "realbin")
+    assert s.binary_exists(str(real)) is True
+    assert s.binary_exists("mullvad-exclude " + str(real)) is True
+    assert s.binary_exists(str(real) + " --flag %U") is True
+    assert s.binary_exists(str(tmp_path / "nope-missing-xyz")) is False
+    assert s.binary_exists("") is False
+    assert s.binary_exists("mullvad-exclude %U") is False
+
+
+def test_binary_exists_bare_name_via_path(tmp_path, monkeypatch):
+    real = _make_exe(tmp_path / "pathbin")
+    monkeypatch.setenv("PATH", str(tmp_path), prepend=os.pathsep)
+    assert s.binary_exists("pathbin") is True
+    assert s.binary_exists("definitely-not-here-xyz") is False

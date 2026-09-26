@@ -187,6 +187,50 @@ def exec_key(exec_path: str) -> str:
     return first if len(tokens) == 1 else first + " " + " ".join(tokens[1:])
 
 
+def binary_exists(exec_string: str) -> bool:
+    """True if the binary in an Exec= line still exists on disk.
+
+    Strips `mullvad-exclude`, field codes (%U) and args, then checks:
+    absolute path -> is it still a file? `flatpak run <id>` -> is that
+    flatpak installed? bare name -> is it on PATH? Never raises.
+    """
+    value = (exec_string or "").strip()
+    if not value:
+        return False
+    if value.startswith("mullvad-exclude "):
+        value = value[len("mullvad-exclude "):].strip()
+    try:
+        tokens = shlex.split(value)
+    except ValueError:
+        return False
+    tokens = [t for t in tokens if not FIELD_CODE_RE.fullmatch(t)]
+    if not tokens:
+        return False
+    first = tokens[0]
+    # flatpak run <app-id>: check that specific app is installed.
+    # First token may be bare "flatpak" or resolved "/usr/bin/flatpak".
+    first_base = Path(first).name if "/" in first else first
+    if first_base == "flatpak" and len(tokens) >= 3 and tokens[1] == "run":
+        if shutil.which("flatpak") is None:
+            return False
+        try:
+            out = subprocess.run(
+                ["flatpak", "info", tokens[2]],
+                capture_output=True, timeout=15,
+            )
+            return out.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            return False
+    if os.path.isabs(first):
+        try:
+            return Path(first).is_file()
+        except OSError:
+            return False
+    if "/" in first:
+        return False  # ambiguous relative path with dirs
+    return shutil.which(first) is not None
+
+
 # Tokens that are packaging noise, not part of an app's real name
 # (architectures, OS names, bundle formats, release channels)
 NOISE_TOKENS = {

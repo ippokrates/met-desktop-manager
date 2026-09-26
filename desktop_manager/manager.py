@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Mapping
 
 from . import generator
-from .scanner import exec_key
+from .scanner import binary_exists, exec_key
 
 TARGET_DIR = Path.home() / ".local" / "share" / "applications"
 LEGACY_STATE_FILE = Path(__file__).resolve().parent.parent / "state.json"
@@ -92,9 +92,12 @@ def find_orphaned(state: dict, selected: Mapping, target_dir,
                   discovered=None) -> dict:
     """State entries matching neither selection IDs nor selection binaries.
 
-    Returns {app_id: {"filename", "binary", "vanished"}} where vanished=True
-    means the managed binary is absent from `discovered` (or discovery is
-    unknown, i.e. discovered=None) — those must never be silently deleted.
+    Returns {app_id: {"filename", "binary", "vanished", "binary_exists"}}
+    where vanished=True means the managed binary is absent from `discovered`
+    (or discovery is unknown, i.e. discovered=None) — those must never be
+    silently deleted. `binary_exists` is a real filesystem check of the
+    managed Exec= target, so callers can tell a truly deleted program
+    (safe to suggest removal) from one that is merely unscanned.
     """
     wanted = set(selected.keys())
     sel_keys = {exec_key(_app_fields(a)[1]) for a in _iter_apps(selected)}
@@ -112,10 +115,12 @@ def find_orphaned(state: dict, selected: Mapping, target_dir,
             key = managed_exec_key(candidate)
         if key and key in sel_keys:
             continue  # same binary under a new ID: adoption, not removal
+        vanished = disc_keys is None or key not in disc_keys
         orphaned[app_id] = {
             "filename": filename,
             "binary": key,
-            "vanished": disc_keys is None or key not in disc_keys,
+            "vanished": vanished,
+            "binary_exists": binary_exists(key) if key else False,
         }
     return orphaned
 
@@ -196,7 +201,9 @@ def sync(selected: Mapping, target_dir: Path | None = None,
       binary vanished are KEPT and reported, never silently deleted.
 
     Returns {'created': [...], 'removed': [...], 'adopted': {old: new},
-    'vanished': [{'app_id', 'filename', 'binary'}]}.
+    'vanished': [{'app_id', 'filename', 'binary', 'binary_exists'}]}.
+    `binary_exists` tells a truly deleted program (safe to suggest removal)
+    from one that is merely unscanned.
     """
     target_dir = Path(target_dir).expanduser() if target_dir else TARGET_DIR
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -251,7 +258,8 @@ def sync(selected: Mapping, target_dir: Path | None = None,
         if info["vanished"] and not prune_vanished:
             state[app_id] = filename  # restore: kept, reported below
             vanished.append({"app_id": app_id, "filename": filename,
-                             "binary": info["binary"]})
+                             "binary": info["binary"],
+                             "binary_exists": info.get("binary_exists", False)})
             continue
         candidate.unlink()
         removed.append(filename)
@@ -269,8 +277,10 @@ def sync(selected: Mapping, target_dir: Path | None = None,
             child.unlink()
             removed.append(child.name)
         else:
+            key = managed_exec_key(child)
             vanished.append({"app_id": None, "filename": child.name,
-                             "binary": managed_exec_key(child)})
+                             "binary": key,
+                             "binary_exists": binary_exists(key) if key else False})
 
     save_state(state, state_file)
     if created or removed:
