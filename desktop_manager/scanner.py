@@ -39,6 +39,7 @@ DEFAULT_CONFIG = {
     "extra_dirs": ["/opt", "~/Downloads", "~/Applications", "~/.local/bin"],
     "max_depth": 3,
     "desktop_files": {"enabled": True},
+    "system_apps": {"hide": True, "allowlist": [], "blacklist": []},
     "flatpak": {"enabled": True},
     "snap": {"enabled": True},
     "excludes": [
@@ -46,6 +47,20 @@ DEFAULT_CONFIG = {
         "chrome-sandbox", "crashpad", "fsnotifier", "abicheck",
         "*.so*", "*.jar", "*.img", "*.iso",
     ],
+}
+
+# Shared system launcher blocklist (shipped data file, basename patterns).
+SYSTEM_LIST_FILE = Path(__file__).resolve().parent / "data" / "system_desktop_ids.txt"
+_system_blocklist_cache: list[str] | None = None
+
+# Categories that mark a launcher as system-owned (case-insensitive).
+# `Utility` is intentionally NOT here: too broad (browsers helpers use it).
+SYSTEM_CATEGORIES = {
+    "settings",
+    "system",
+    "screensaver",
+    "desktopsettings",
+    "hardwaresettings",
 }
 
 # Directories never descended into (noise / venv / caches / bundled runtimes)
@@ -117,6 +132,53 @@ def _is_excluded(basename: str, excludes: list[str]) -> bool:
             if fnmatch.fnmatch(lower, pat):
                 return True
         elif pat in lower:
+            return True
+    return False
+
+
+def _load_system_blocklist() -> list[str]:
+    """Shared basename patterns for system launchers (cached, never raises).
+
+    Reads `data/system_desktop_ids.txt` next to this file. `#` comments
+    and blank lines are skipped. Returns [] when the file is missing.
+    """
+    global _system_blocklist_cache
+    if _system_blocklist_cache is not None:
+        return _system_blocklist_cache
+    patterns: list[str] = []
+    try:
+        text = SYSTEM_LIST_FILE.read_text(errors="ignore")
+    except OSError:
+        _system_blocklist_cache = []
+        return []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        patterns.append(line)
+    _system_blocklist_cache = patterns
+    return patterns
+
+
+def _is_system_desktop(filename: str, categories: str,
+                       patterns: list[str] | None = None,
+                       allowlist: list[str] | None = None) -> bool:
+    """True when a .desktop launcher should hide as a system app.
+
+    Order: allowlist wins (exact or glob, e.g. `firefox.desktop`), then
+    shared patterns + user blacklist, then `Categories=` fallback.
+
+    Example:
+      _is_system_desktop("cinnamon-settings-sound.desktop", "Settings;") -> True
+      _is_system_desktop("firefox.desktop", "Network;WebBrowser;") -> False
+    """
+    if _is_excluded(filename, allowlist or []):
+        return False
+    if _is_excluded(filename, patterns or []):
+        return True
+    cats = [c.strip().lower() for c in (categories or "").split(";") if c.strip()]
+    for c in cats:
+        if c in SYSTEM_CATEGORIES or "systemsettings" in c or c.endswith("settingsdialog"):
             return True
     return False
 
@@ -507,18 +569,28 @@ def _parse_desktop_file(path: Path) -> dict:
             fields["NoDisplay"] = line[10:].strip().lower()
         elif line.startswith("Hidden=") and "Hidden" not in fields:
             fields["Hidden"] = line[7:].strip().lower()
+        elif line.startswith("Categories=") and "Categories" not in fields:
+            fields["Categories"] = line[11:].strip()
     return fields
 
 
 def scan_desktop_files(desktop_dirs: list[str] | None = None,
-                       excludes: list[str] | None = None) -> list[DiscoveredApp]:
+                       excludes: list[str] | None = None,
+                       hide_system: bool = True,
+                       system_allowlist: list[str] | None = None,
+                       system_extra_blacklist: list[str] | None = None) -> list[DiscoveredApp]:
     """Harvest binaries referenced by installed .desktop launchers.
 
     One entry per binary (fewest-args launcher wins, e.g. plain Codium over
     "Codium --new-window"). Skips hidden entries, our own managed files,
-    and unresolvable/deleted binaries.
+    system launchers (when hide_system), and unresolvable/deleted binaries.
+    System detection uses the shared blocklist plus `Categories=` fallback;
+    `system_allowlist` always shows, `system_extra_blacklist` always hides.
     """
     excludes = excludes or []
+    system_allowlist = system_allowlist or []
+    shared_patterns = _load_system_blocklist()
+    extra_blacklist = list(system_extra_blacklist or [])
     if desktop_dirs is None:
         desktop_dirs = DESKTOP_FILE_DIRS
     best: dict[str, tuple[int, str, DiscoveredApp]] = {}  # exec -> (nargs, fname, app)
@@ -538,6 +610,14 @@ def scan_desktop_files(desktop_dirs: list[str] | None = None,
                 if fields.get("Type", "Application") != "Application":
                     continue
                 if fields.get("NoDisplay") == "true" or fields.get("Hidden") == "true":
+                    continue
+                if hide_system and _is_system_desktop(
+                        f.name, fields.get("Categories", ""),
+                        shared_patterns, system_allowlist):
+                    continue
+                if (extra_blacklist
+                        and _is_excluded(f.name, extra_blacklist)
+                        and not _is_excluded(f.name, system_allowlist)):
                     continue
                 exec_line = fields.get("Exec", "")
                 # Skip foreign mullvad-wrapped launchers (e.g. handmade
@@ -634,17 +714,35 @@ def scan_snap(enabled: bool = True) -> list[DiscoveredApp]:
     return apps
 
 
-def scan(config: dict | None = None) -> list[DiscoveredApp]:
-    """Discover apps per config (loads apps.yaml when None). Sorted by name."""
+def scan(config: dict | None = None, show_system: bool | None = None) -> list[DiscoveredApp]:
+    """Discover apps per config (loads apps.yaml when None). Sorted by name.
+
+    System launchers hide by default (`system_apps.hide`, True). Pass
+    show_system=True/False to force show/hide for one run (CLI flag,
+    TUI toggle); None follows the config.
+    """
     cfg = config if config is not None else load_config()
     excludes: list[str] = list(cfg.get("excludes", []) or [])
     max_depth = int(cfg.get("max_depth", 3) or 3)
+    sys_cfg = cfg.get("system_apps", {}) or {}
+    hide_system = bool(sys_cfg.get("hide", True))
+    if show_system is True:
+        hide_system = False
+    elif show_system is False:
+        hide_system = True
+    system_allowlist = list(sys_cfg.get("allowlist", []) or [])
+    system_extra_blacklist = list(sys_cfg.get("blacklist", []) or [])
 
     found: list[DiscoveredApp] = []
     desk_cfg = cfg.get("desktop_files", {})
     desk_enabled = desk_cfg.get("enabled", True) if isinstance(desk_cfg, dict) else bool(desk_cfg)
     if desk_enabled:
-        found.extend(scan_desktop_files(excludes=excludes))
+        found.extend(scan_desktop_files(
+            excludes=excludes,
+            hide_system=hide_system,
+            system_allowlist=system_allowlist,
+            system_extra_blacklist=system_extra_blacklist,
+        ))
     found.extend(scan_path_dirs(cfg.get("path_dirs", []), excludes))
     found.extend(scan_extra_dirs(cfg.get("extra_dirs", []), max_depth, excludes))
 

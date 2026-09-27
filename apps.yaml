@@ -23,6 +23,15 @@ max_depth: 3
 desktop_files:
   enabled: true
 
+# System launchers (settings panels, helpers, session pieces) hide by
+# default using a shared list + Categories= fallback. Show once with
+# `desktop-manager --show-system` or the TUI toggle (press s).
+# allowlist always shows (exact or glob), blacklist always hides more.
+system_apps:
+  hide: true
+  allowlist: []
+  blacklist: []
+
 # Package managers
 flatpak:
   enabled: true

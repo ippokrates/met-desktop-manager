@@ -50,6 +50,13 @@ Requirements: Python 3.12+, `questionary`, `rich`, `pyyaml`
 | `desktop-manager --list` | Print every discovered app |
 | `desktop-manager --create "Google Chrome" --exec /opt/google/chrome/google-chrome` | One-off launcher, no picker |
 | `desktop-manager --sync --all` | Launcher for everything found, no questions asked |
+| `desktop-manager --list --show-system` | Include hidden system launchers |
+
+System launchers (settings panels, helpers, session pieces) hide by
+default via a shared list plus a `Categories=` fallback. In the picker,
+the first row toggles them (Space to flip, Enter applies), or type `!sys` in the filter
+box. In pipes/SSH mode type `s` at the numbers prompt. Override in
+`apps.yaml` with `system_apps: {hide, allowlist, blacklist}`.
 
 Without pipx, prefix with the venv python:
 `.venv/bin/python -m desktop_manager --list`.

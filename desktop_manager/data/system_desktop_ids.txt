@@ -1,0 +1,71 @@
+# Shared system launcher blocklist.
+# One basename pattern per line, matched case-insensitively against the
+# original .desktop filename (source_desktop). `*` and `?` are globs.
+# Lines starting with `#` and blank lines are ignored.
+# This only filters `desktop:` apps. Raw binaries still use `excludes`.
+# Users can force-show with system_apps.allowlist or --show-system.
+
+# Settings panels: Cinnamon / Mint
+cinnamon-settings*.desktop
+cinnamon-*-panel.desktop
+# Settings panels: GNOME
+org.gnome.Settings*.desktop
+gnome-control-center*.desktop
+gnome-online-accounts-gtk.desktop
+org.gnome.GPaste.*.desktop
+org.freedesktop.IBus.Setup.desktop
+# Settings panels: generic / Xfce / Qt
+qt5ct.desktop
+system-config-printer.desktop
+nm-connection-editor.desktop
+
+# Session and login pieces, never split-tunneled
+cinnamon.desktop
+cinnamon2d.desktop
+
+# Mint and Ubuntu system tools
+mintdrivers.desktop
+mintsources.desktop
+mintupdate*.desktop
+mintinstall*.desktop
+mintlocale*.desktop
+mintreport.desktop
+mintwelcome.desktop
+lightdm-settings.desktop
+timeshift-gtk.desktop
+gdebi.desktop
+nvidia-settings.desktop
+
+# GNOME helpers and viewers
+org.gnome.baobab.desktop
+org.gnome.DiskUtility.desktop
+org.gnome.PowerStats.desktop
+org.gnome.SystemMonitor.desktop
+gnome-system-monitor-kde.desktop
+org.gnome.Terminal.desktop
+org.gnome.Screenshot.desktop
+org.gnome.Calculator.desktop
+org.gnome.clocks.desktop
+org.gnome.seahorse.Application.desktop
+gcr-prompter.desktop
+gcr-viewer.desktop
+gnome-disk-image-mounter.desktop
+gnome-disk-image-writer.desktop
+gkbd-keyboard-display.desktop
+mate-color-select.desktop
+onboard.desktop
+
+# KDE helpers
+org.kde.kdeconnect-settings.desktop
+org.kde.kdeconnect.nonplasma.desktop
+org.kde.kdeconnect.sms.desktop
+
+# Handler shims and misc helpers, not real apps
+*-url-handler.desktop
+codium-url-handler.desktop
+cursor-url-handler.desktop
+google-maps-geo-handler.desktop
+display-im6.q16.desktop
+hplj1020.desktop
+monodoc-http.desktop
+geoclue-demo-agent.desktop

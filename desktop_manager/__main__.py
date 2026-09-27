@@ -14,6 +14,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--icon", default="", help="Icon name/path for --create")
     p.add_argument("--sync", action="store_true", help="Sync selection non-interactively")
     p.add_argument("--all", action="store_true", help="With --sync: select all discovered apps")
+    p.add_argument("--show-system", action="store_true",
+                   help="Include hidden system launchers for this run")
+    p.add_argument("--hide-system", action="store_true",
+                   help="Hide system launchers (default, overrides --show-system off)")
     return p
 
 
@@ -88,14 +92,43 @@ def _print_made_executable(result: dict) -> None:
         print(f"made executable: {fixed}")
 
 
+def _resolve_show_system(cfg: dict, override: bool | None) -> tuple[dict, bool]:
+    """Apply --show/--hide-system override to a config copy.
+
+    Returns (effective_cfg, showing). Single-arg scan() calls keep working
+    with existing test mocks.
+    """
+    cfg = dict(cfg or {})
+    sys_cfg = dict(cfg.get("system_apps", {}) or {})
+    if override is True:
+        sys_cfg["hide"] = False
+    elif override is False:
+        sys_cfg["hide"] = True
+    cfg["system_apps"] = sys_cfg
+    showing = not bool(sys_cfg.get("hide", True))
+    return cfg, showing
+
+
+def _rescan(cfg: dict, show: bool) -> list:
+    """Rescan with system apps shown/hidden (single-arg scan for mock compat)."""
+    from .scanner import scan as _scan
+    new_cfg = dict(cfg or {})
+    sys_cfg = dict(new_cfg.get("system_apps", {}) or {})
+    sys_cfg["hide"] = not show
+    new_cfg["system_apps"] = sys_cfg
+    return _scan(new_cfg)
+
+
 def main() -> None:
     from . import manager
     from .scanner import group_by_directory, load_config, scan
 
     parser = build_parser()
     args = parser.parse_args()
+    override = True if args.show_system else (False if args.hide_system else None)
     if args.list:
-        apps = scan(load_config())
+        cfg, showing = _resolve_show_system(load_config(), override)
+        apps = scan(cfg)
         if not apps:
             print("No apps discovered. Check apps.yaml paths.")
             return
@@ -121,7 +154,8 @@ def main() -> None:
             print(f"made executable: {fixed}")
         return
     if args.sync:
-        apps = scan(load_config())
+        cfg, _showing = _resolve_show_system(load_config(), override)
+        apps = scan(cfg)
         if args.all:
             selected = {a.id: a for a in apps}
         else:
@@ -135,13 +169,15 @@ def main() -> None:
                             "Kept, no longer discovered (not deleted):")
             sys.exit(1)
         return
-    interactive()
+    interactive(show_system=override)
 
 
-def interactive(target_dir=None, state_file=None) -> None:
+def interactive(target_dir=None, state_file=None, show_system=None) -> None:
     """No-args mode: checkbox picker -> confirm -> sync -> summary.
 
     target_dir/state_file default to the real locations; tests pass tmp paths.
+    show_system True/False forces system launchers shown/hidden (CLI flags);
+    None follows apps.yaml.
     """
     from pathlib import Path
 
@@ -151,7 +187,8 @@ def interactive(target_dir=None, state_file=None) -> None:
     target_dir = Path(target_dir).expanduser() if target_dir else manager.TARGET_DIR
     state_file = Path(state_file) if state_file else manager.STATE_FILE
 
-    apps = scan(load_config())
+    cfg, showing = _resolve_show_system(load_config(), show_system)
+    apps = scan(cfg)
     if not apps:
         print("No apps discovered. Check apps.yaml paths.")
         return
@@ -162,9 +199,13 @@ def interactive(target_dir=None, state_file=None) -> None:
     preticked = _preticked_ids(apps, state, target_dir)
 
     if sys.stdin.isatty():
-        picked = _picker_tty(apps, state, preticked)
+        holder: dict = {}
+        picked = _picker_tty(apps, state, preticked, cfg, showing, holder)
+        apps = holder.get("apps", apps)
     else:
-        picked = _picker_plain(apps, state, preticked)
+        holder = {}
+        picked = _picker_plain(apps, state, preticked, cfg, showing, holder)
+        apps = holder.get("apps", apps)
     if picked is None:
         print("Cancelled, nothing changed.")
         return
@@ -225,26 +266,54 @@ def _preticked_ids(apps, state, target_dir) -> set[str]:
     return ticked
 
 
-def _picker_tty(apps, state, preticked: set[str] | None = None) -> set[str] | None:
-    """questionary picker with substring filter rounds; accumulates picks."""
+TOGGLE_SYSTEM_VALUE = "__toggle_system__"
+
+
+def _picker_tty(apps, state, preticked: set[str] | None = None,
+                cfg: dict | None = None, show_system: bool = False,
+                _final: dict | None = None) -> set[str] | None:
+    """questionary picker with substring filter rounds; accumulates picks.
+
+    First row is a system-apps switch (Separator above/below it, `s`
+    shortcut). Picking it flips the list and redraws; picks are kept.
+    Typing `!sys` in the filter box does the same. `_final["apps"]`
+    receives the list backing the returned picks (after toggles).
+    """
     try:
         import questionary
-        from questionary import Choice
+        from questionary import Choice, Separator
     except ImportError:
-        return _picker_plain(apps, state, preticked)
+        return _picker_plain(apps, state, preticked, cfg, show_system, _final)
 
     picked: set[str] = set(preticked) if preticked is not None else {
         a.id for a in apps if a.id in state}
     from .scanner import group_base_name, group_key_for_app
-    base_for = {a.id: group_base_name(group_key_for_app(a)) for a in apps}
+    cur_apps = list(apps)
+    cur_show = show_system
+
+    def _rebuild_base():
+        return {a.id: group_base_name(group_key_for_app(a)) for a in cur_apps}
+
+    base_for = _rebuild_base()
     while True:
         filt = questionary.text(
             "Filter apps (substring of name/path, Enter = show all):").ask()
         if filt is None:  # Ctrl-C
             return None
-        filt = filt.strip().lower()
-        candidates = [a for a in apps
-                      if not filt or filt in f"{a.name} {a.exec_path}".lower()]
+        filt = filt.strip()
+        if filt.lower() in ("!sys", "!system") and cfg is not None:
+            cur_show = not cur_show
+            try:
+                cur_apps = _rescan(cfg, cur_show)
+            except Exception:
+                pass
+            base_for = _rebuild_base()
+            print(f"System apps {'shown' if cur_show else 'hidden'} "
+                  f"({len(cur_apps)} total).")
+            continue
+        low = filt.lower()
+        candidates = [a for a in cur_apps
+                      if not low or low in f"{a.name} {a.exec_path}".lower()]
         if not candidates:
             print("No matches, try another filter.")
             continue
@@ -252,72 +321,114 @@ def _picker_tty(apps, state, preticked: set[str] | None = None) -> set[str] | No
         candidates.sort(key=lambda a: (base_for.get(a.id, "").lower(),
                                        a.name.lower()))
         print(f"{len(candidates)} match(es). Space toggles, Enter confirms.")
+        toggle_label = (f"SHOW SYSTEM APPS: {'ON' if cur_show else 'OFF'}"
+                        f"  ({len(cur_apps)} shown)")
         choices = [
+            Choice(title=f">>> {toggle_label} <<< (Space to flip, Enter applies)",
+                   value=TOGGLE_SYSTEM_VALUE,
+                   description="toggle hidden settings and tools"),
+            Separator(),
+        ]
+        choices += [
             Choice(title=f"[{base_for.get(a.id, '?')}] {a.name}{_chmod_tag(a)}  "
                          f"({a.exec_path})",
                    value=a.id, checked=(a.id in picked))
             for a in candidates
         ]
         answer = questionary.checkbox(
-            "Select apps:", choices=choices).ask()
+            "Select apps:", choices=choices,
+            instruction="(Space on first row toggles system apps)").ask()
         if answer is None:  # Ctrl-C
             return None
+        if TOGGLE_SYSTEM_VALUE in answer:
+            picked = ((picked - {a.id for a in candidates})
+                      | (set(answer) - {TOGGLE_SYSTEM_VALUE}))
+            cur_show = not cur_show
+            if cfg is not None:
+                try:
+                    cur_apps = _rescan(cfg, cur_show)
+                except Exception:
+                    pass
+                base_for = _rebuild_base()
+                print(f"System apps {'shown' if cur_show else 'hidden'} "
+                      f"({len(cur_apps)} total).")
+            continue
         picked = (picked - {a.id for a in candidates}) | set(answer)
         more = questionary.confirm(
             f"{len(picked)} selected. Filter again to add more?",
             default=False).ask()
         if not more:
+            if _final is not None:
+                _final["apps"] = cur_apps
             return picked
 
 
-def _picker_plain(apps, state, preticked: set[str] | None = None) -> set[str] | None:
+def _picker_plain(apps, state, preticked: set[str] | None = None,
+                  cfg: dict | None = None, show_system: bool = False,
+                  _final: dict | None = None) -> set[str] | None:
     """Stdlib fallback for non-TTY (pipes/SSH): numbered ranges like 1,3,5-9.
 
     Visual grouping only: headers per directory, flat numbering underneath
     so `1,3,5-9` keeps working. Number -> app mapping follows the grouped
-    order (folder name, then app name).
+    order (folder name, then app name). Type `s` or `!sys` to flip system
+    apps when cfg is given (loops and redraws).
     """
     from .scanner import group_by_directory
 
     ticked = set(preticked) if preticked is not None else {
         a.id for a in apps if a.id in state}
-    groups = group_by_directory(apps)
-    ordered = [a for g_apps in groups.values() for a in g_apps]
-    console = _group_console()
-    n = 0
-    for group_key, g_apps in groups.items():
-        _print_group_header(group_key, len(g_apps), console)
-        for a in g_apps:
-            n += 1
-            mark = "x" if a.id in ticked else " "
-            print(f"    {n:4} [{mark}] {a.name}{_chmod_tag(a)} | {a.exec_path}")
-    try:
-        raw = input("Enter numbers/ranges (e.g. 1,3,5-9), empty = none: ").strip()
-    except (EOFError, KeyboardInterrupt):
-        return None
-    picked: set[str] = set()
-    for part in raw.split(","):
-        part = part.strip()
-        if not part:
-            continue
-        if "-" in part:
+    cur_apps = list(apps)
+    cur_show = show_system
+    while True:
+        groups = group_by_directory(cur_apps)
+        ordered = [a for g_apps in groups.values() for a in g_apps]
+        console = _group_console()
+        n = 0
+        for group_key, g_apps in groups.items():
+            _print_group_header(group_key, len(g_apps), console)
+            for a in g_apps:
+                n += 1
+                mark = "x" if a.id in ticked else " "
+                print(f"    {n:4} [{mark}] {a.name}{_chmod_tag(a)} | {a.exec_path}")
+        if cfg is not None:
+            print(f"System apps: {'shown' if cur_show else 'hidden'} "
+                  f"({len(cur_apps)} shown). Type s or !sys to toggle.")
+        try:
+            raw = input("Enter numbers/ranges (e.g. 1,3,5-9), empty = none: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return None
+        if cfg is not None and raw.strip().lower() in ("s", "!sys", "!system"):
+            cur_show = not cur_show
             try:
-                lo, hi = part.split("-", 1)
-                for num in range(int(lo), int(hi) + 1):
+                cur_apps = _rescan(cfg, cur_show)
+            except Exception:
+                pass
+            continue
+        picked: set[str] = set()
+        for part in raw.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            if "-" in part:
+                try:
+                    lo, hi = part.split("-", 1)
+                    for num in range(int(lo), int(hi) + 1):
+                        if 1 <= num <= len(ordered):
+                            picked.add(ordered[num - 1].id)
+                except ValueError:
+                    print(f"Ignoring invalid range: {part}")
+            else:
+                try:
+                    num = int(part)
                     if 1 <= num <= len(ordered):
                         picked.add(ordered[num - 1].id)
-            except ValueError:
-                print(f"Ignoring invalid range: {part}")
-        else:
-            try:
-                num = int(part)
-                if 1 <= num <= len(ordered):
-                    picked.add(ordered[num - 1].id)
-                else:
-                    print(f"Ignoring out-of-range: {part}")
-            except ValueError:
-                print(f"Ignoring invalid entry: {part}")
-    return picked
+                    else:
+                        print(f"Ignoring out-of-range: {part}")
+                except ValueError:
+                    print(f"Ignoring invalid entry: {part}")
+        if _final is not None:
+            _final["apps"] = cur_apps
+        return picked
 
 
 def _print_summary(result: dict, manager, target_dir) -> None:

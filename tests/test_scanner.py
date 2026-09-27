@@ -359,3 +359,72 @@ def test_scan_desktop_files_harvests_source_desktop(tmp_path):
     # plain binaries have no original to shadow
     assert s.DiscoveredApp(id="x", name="X",
                            exec_path="/opt/x").source_desktop == ""
+
+
+def test_parse_desktop_file_reads_categories(tmp_path):
+    f = tmp_path / "s.desktop"
+    f.write_text("[Desktop Entry]\nName=S\nExec=/bin/s\nCategories=Settings;\n")
+    assert s._parse_desktop_file(f)["Categories"] == "Settings;"
+
+
+def test_is_system_desktop_patterns_and_categories():
+    pats = ["cinnamon-settings*.desktop", "org.gnome.Settings.desktop"]
+    assert s._is_system_desktop("cinnamon-settings-sound.desktop", "Settings;", pats, [])
+    assert s._is_system_desktop("whatever.desktop", "System;Settings;", [], [])
+    assert not s._is_system_desktop("firefox.desktop", "Network;WebBrowser;", pats, [])
+    # allowlist wins over everything
+    assert not s._is_system_desktop(
+        "cinnamon-settings-sound.desktop", "Settings;", pats,
+        ["cinnamon-settings-sound.desktop"])
+
+
+def test_scan_desktop_files_hides_system_by_default(tmp_path):
+    appdir = tmp_path / "applications"
+    appdir.mkdir()
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    _exe(bindir / "syspanel")
+    _exe(bindir / "browser")
+    _launcher(appdir, "cinnamon-settings-sound.desktop",
+              "[Desktop Entry]\nName=Sound\nExec=" + str(bindir / "syspanel") + "\n"
+              "Categories=Settings;\n")
+    _launcher(appdir, "mybrowser.desktop",
+              "[Desktop Entry]\nName=Browser\nExec=" + str(bindir / "browser") + "\n"
+              "Categories=Network;WebBrowser;\n")
+    hidden = s.scan_desktop_files([str(appdir)], excludes=[], hide_system=True)
+    assert [a.name for a in hidden] == ["Browser"]
+    shown = s.scan_desktop_files([str(appdir)], excludes=[], hide_system=False)
+    assert {a.name for a in shown} == {"Browser", "Sound"}
+    # allowlist rescues one system app
+    rescued = s.scan_desktop_files(
+        [str(appdir)], excludes=[], hide_system=True,
+        system_allowlist=["cinnamon-settings-sound.desktop"])
+    assert {a.name for a in rescued} == {"Browser", "Sound"}
+    # extra blacklist hides one more normal app
+    extra = s.scan_desktop_files(
+        [str(appdir)], excludes=[], hide_system=False,
+        system_extra_blacklist=["mybrowser.desktop"])
+    assert [a.name for a in extra] == ["Sound"]
+
+
+def test_scan_show_system_override(tmp_path):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    appdir = tmp_path / "applications"
+    appdir.mkdir()
+    _exe(bindir / "panel")
+    _launcher(appdir, "panel-settings.desktop",
+              "[Desktop Entry]\nName=Panel\nExec=" + str(bindir / "panel") + "\n"
+              "Categories=Settings;\n")
+    cfg = {"path_dirs": [], "extra_dirs": [],
+           "desktop_files": {"enabled": False},
+           "flatpak": {"enabled": False}, "snap": {"enabled": False},
+           "system_apps": {"hide": True, "allowlist": [], "blacklist": []}}
+    # desktop_files disabled here so this just checks the override plumbing
+    assert s.scan(cfg) == []
+    cfg_on = dict(cfg)
+    cfg_on["desktop_files"] = {"enabled": True}
+    import unittest.mock as mock
+    with mock.patch.object(s, "DESKTOP_FILE_DIRS", [str(appdir)]):
+        assert [a.name for a in s.scan(cfg_on)] == []
+        assert [a.name for a in s.scan(cfg_on, show_system=True)] == ["Panel"]
