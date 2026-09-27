@@ -24,7 +24,7 @@ X-Managed-By=met-desktop-manager
 git clone https://github.com/ippokrates/met-desktop-manager.git
 cd met-desktop-manager
 pipx install .          # install the command
-pipx reinstall .        # pick up code changes later
+pipx reinstall met-desktop-manager        # pick up code changes later
 ```
 
 **Development** (venv + tests):
