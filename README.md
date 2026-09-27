@@ -50,7 +50,7 @@ Requirements: Python 3.12+, `questionary`, `rich`, `pyyaml`
 | `desktop-manager --list` | Print every discovered app |
 | `desktop-manager --create "Google Chrome" --exec /opt/google/chrome/google-chrome` | One-off launcher, no picker |
 | `desktop-manager --sync --all` | Launcher for everything found, no questions asked |
-| `desktop-manager --list --show-system` | Include hidden system launchers |
+| `desktop-manager --list --show-system` | Include hidden system launchers (`--show-system` also works with bare `desktop-manager` and `--sync --all`; `--hide-system` forces hiding) |
 
 System launchers (settings panels, helpers, session pieces) hide by
 default via a shared list plus a `Categories=` fallback. In the picker,
@@ -82,6 +82,7 @@ apps.yaml → scanner → picker → generator → manager → ~/.local/share/ap
   distro-installed apps like VSCodium show up with no extra config), then
   `flatpak`/`snap`, then raw filesystem scan of `path_dirs` (flat) and
   `extra_dirs` (recursive, depth-limited). Filters noise with `excludes`,
+  the shared system launcher list plus a `Categories=` fallback,
   an extension blocklist, and magic-byte checks, so only real binaries
   and scripts pass.
 - **Generator** (`desktop_manager/generator.py`) - builds the `.desktop`
@@ -117,9 +118,14 @@ path_dirs:   # scanned flat, executables only
 extra_dirs:  # scanned recursively, max_depth levels deep
 max_depth: 3
 desktop_files: {enabled: true}  # harvest Exec= from installed launchers
+system_apps:  # system launchers hide by default; allowlist shows, blacklist hides more
+  hide: true
+  allowlist: []
+  blacklist: []
 flatpak: {enabled: true}
 snap: {enabled: true}
 excludes:    # substrings or globs, e.g. uninstall, "*.so*", crashpad
+target_dir: ~/.local/share/applications
 ```
 
 `/usr/bin` stays excluded on purpose (2,400+ CLI tools would flood the
@@ -128,7 +134,7 @@ picker). Re-add it if you ever want everything listed.
 ## Test
 
 ```bash
-.venv/bin/python -m pytest tests/ -q   # 64 tests, tmp dirs only
+.venv/bin/python -m pytest tests/ -q   # 82 tests, tmp dirs only
 ```
 
 The suite never touches the real applications dir or real state -
