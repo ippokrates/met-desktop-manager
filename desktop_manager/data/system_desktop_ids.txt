@@ -69,3 +69,46 @@ display-im6.q16.desktop
 hplj1020.desktop
 monodoc-http.desktop
 geoclue-demo-agent.desktop
+
+# File managers, archive, calendar (companions, never split-tunneled)
+org.gnome.FileRoller.desktop
+org.gnome.Calendar.desktop
+nemo.desktop
+org.gnome.Nautilus.desktop
+
+# Calculators (org.gnome.Calculator.desktop is above with GNOME helpers)
+gnome-calculator.desktop
+mate-calc.desktop
+kcalc.desktop
+xfce4-calculator.desktop
+galculator.desktop
+
+# Clocks (org.gnome.clocks.desktop is above with GNOME helpers)
+gnome-clocks.desktop
+
+# Image viewers
+xviewer.desktop
+eog.desktop
+org.gnome.eog.desktop
+org.gnome.Shotwell-Viewer.desktop
+gwenview.desktop
+ristretto.desktop
+pix.desktop
+
+# Document viewers
+xreader.desktop
+evince.desktop
+org.gnome.Evince.desktop
+okular.desktop
+atril.desktop
+
+# Text editors (xed family and cross-distro equivalents)
+org.x.editor.desktop
+org.gnome.gedit.desktop
+gedit.desktop
+org.gnome.TextEditor.desktop
+org.kde.kate.desktop
+kate.desktop
+mousepad.desktop
+pluma.desktop
+vim.desktop
