@@ -328,3 +328,46 @@ def test_picker_plain_no_toggle_hint_without_cfg(monkeypatch, capsys):
     assert picked == {"a1"}
     assert "Type s or !sys" not in capsys.readouterr().out
 
+
+
+# --- _toggle_rescan: the flip rule now lives in one place ------------------
+
+
+def test_toggle_rescan_flips_and_returns_pair(monkeypatch):
+    from desktop_manager.__main__ import _toggle_rescan
+    monkeypatch.setattr("desktop_manager.__main__._try_rescan",
+                        lambda cfg, show: ["with-system"])
+    # hidden -> shown
+    assert _toggle_rescan({}, ["hidden-list"], False) == (["with-system"], True)
+    # shown -> hidden
+    assert _toggle_rescan({}, ["shown-list"], True) == (["with-system"], False)
+
+
+def test_toggle_rescan_returns_none_on_failure(monkeypatch):
+    """Failure must leave BOTH the list and the toggle alone. This is the
+    rule that was duplicated across three sites; now it has one owner."""
+    from desktop_manager.__main__ import _toggle_rescan
+    monkeypatch.setattr("desktop_manager.__main__._try_rescan",
+                        lambda cfg, show: None)
+    assert _toggle_rescan({}, ["unchanged"], False) is None
+
+
+def test_toggle_rescan_requests_the_opposite_value(monkeypatch):
+    """It must ask for the flipped value, not the current one."""
+    from desktop_manager.__main__ import _toggle_rescan
+    seen = []
+
+    def fake(cfg, show):
+        seen.append(show)
+        return ["x"]
+
+    monkeypatch.setattr("desktop_manager.__main__._try_rescan", fake)
+    _toggle_rescan({}, ["a"], False)
+    _toggle_rescan({}, ["a"], True)
+    assert seen == [True, False]
+
+
+def test_toggle_rescan_without_cfg_is_none(monkeypatch):
+    """_try_rescan rejects a None config; the helper must propagate that."""
+    from desktop_manager.__main__ import _toggle_rescan
+    assert _toggle_rescan(None, ["a"], False) is None

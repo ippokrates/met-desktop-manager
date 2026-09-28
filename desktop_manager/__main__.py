@@ -131,6 +131,23 @@ def _try_rescan(cfg: dict, show: bool) -> list | None:
         return None
 
 
+def _toggle_rescan(cfg, cur_apps, cur_show):
+    """Rescan after a system-apps toggle. Returns (apps, show) or None.
+
+    None means the rescan failed, so the caller must keep the current list
+    AND the current toggle. Flipping only on success is the whole point:
+    the two can never disagree about what the list contains.
+
+    Example:
+      _toggle_rescan(cfg, apps, False) -> (apps_with_system, True)
+      rescan raises                     -> None
+    """
+    new_apps = _try_rescan(cfg, not cur_show)
+    if new_apps is None:
+        return None
+    return new_apps, not cur_show
+
+
 def main() -> None:
     from . import manager
     from .scanner import group_by_directory, load_config, scan
@@ -311,11 +328,10 @@ def _picker_tty(apps, state, preticked: set[str] | None = None,
             return None
         filt = filt.strip()
         if filt.lower() in ("!sys", "!system") and cfg is not None:
-            new_apps = _try_rescan(cfg, not cur_show)
-            if new_apps is None:
+            new = _toggle_rescan(cfg, cur_apps, cur_show)
+            if new is None:
                 continue  # failed: keep old list and old toggle
-            cur_show = not cur_show
-            cur_apps = new_apps
+            cur_apps, cur_show = new
             base_for = _rebuild_base()
             print(f"System apps {'shown' if cur_show else 'hidden'} "
                   f"({len(cur_apps)} total).")
@@ -352,10 +368,9 @@ def _picker_tty(apps, state, preticked: set[str] | None = None,
         if TOGGLE_SYSTEM_VALUE in answer:
             picked = ((picked - {a.id for a in candidates})
                       | (set(answer) - {TOGGLE_SYSTEM_VALUE}))
-            new_apps = _try_rescan(cfg, not cur_show)
-            if new_apps is not None:
-                cur_show = not cur_show
-                cur_apps = new_apps
+            new = _toggle_rescan(cfg, cur_apps, cur_show)
+            if new is not None:
+                cur_apps, cur_show = new
                 base_for = _rebuild_base()
                 print(f"System apps {'shown' if cur_show else 'hidden'} "
                       f"({len(cur_apps)} total).")
@@ -405,10 +420,9 @@ def _picker_plain(apps, state, preticked: set[str] | None = None,
         except (EOFError, KeyboardInterrupt):
             return None
         if cfg is not None and raw.strip().lower() in ("s", "!sys", "!system"):
-            new_apps = _try_rescan(cfg, not cur_show)
-            if new_apps is not None:
-                cur_show = not cur_show
-                cur_apps = new_apps
+            new = _toggle_rescan(cfg, cur_apps, cur_show)
+            if new is not None:
+                cur_apps, cur_show = new
             continue
         picked: set[str] = set()
         for part in raw.split(","):
