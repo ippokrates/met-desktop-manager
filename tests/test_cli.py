@@ -293,3 +293,38 @@ def test_list_passes_show_system_flag(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["met", "--list"])
     m.main()
     assert seen["show_system"] is None      # no flag -> config decides
+
+
+# --- typing the toggle keyword with no config must not crash --------------
+
+
+def test_picker_plain_s_keyword_without_cfg(monkeypatch, capsys):
+    """With no cfg there is no toggle, so 's' must be rejected as an invalid
+    entry and the picker must move on.
+
+    The `cfg is not None` guard is load-bearing, not redundant: without it
+    the branch would call _try_rescan(None), get None, and hit an
+    unconditional `continue`, looping forever with no way out but Ctrl-C.
+    """
+    import desktop_manager.__main__ as m
+    monkeypatch.setattr("desktop_manager.scanner.group_by_directory",
+                        lambda apps: {"g": list(apps)})
+    monkeypatch.setattr("builtins.input", lambda _="": "s")
+    # Returns (not hangs) and selects nothing: proves no infinite loop.
+    picked = m._picker_plain(_fake_apps(), {}, cfg=None, show_system=False)
+    assert picked == set()
+    out = capsys.readouterr().out
+    assert "Ignoring invalid entry" in out
+
+
+def test_picker_plain_no_toggle_hint_without_cfg(monkeypatch, capsys):
+    """The hint block is a real guard: with no cfg there is no toggle, so the
+    'Type s or !sys' line must stay hidden."""
+    import desktop_manager.__main__ as m
+    monkeypatch.setattr("desktop_manager.scanner.group_by_directory",
+                        lambda apps: {"g": list(apps)})
+    monkeypatch.setattr("builtins.input", lambda _="": "1")
+    picked = m._picker_plain(_fake_apps(), {}, cfg=None, show_system=False)
+    assert picked == {"a1"}
+    assert "Type s or !sys" not in capsys.readouterr().out
+
