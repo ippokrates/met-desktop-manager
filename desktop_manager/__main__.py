@@ -94,30 +94,25 @@ def _print_made_executable(result: dict) -> None:
 
 
 def _resolve_show_system(cfg: dict, override: bool | None) -> tuple[dict, bool]:
-    """Apply --show/--hide-system override to a config copy.
+    """Return (config, showing_system_apps) for a --show/--hide-system flag.
 
-    Returns (effective_cfg, showing). Single-arg scan() calls keep working
-    with existing test mocks.
+    The config is left as loaded; the override is applied by passing
+    `show_system` to scan() rather than by rewriting system_apps.hide, so
+    there is only one place that knows how the override works.
+
+    Example:
+      _resolve_show_system(cfg, True)  -> (cfg, True)   # show them
+      _resolve_show_system(cfg, None)  -> (cfg, not hide)
     """
-    cfg = dict(cfg or {})
-    sys_cfg = dict(cfg.get("system_apps", {}) or {})
-    if override is True:
-        sys_cfg["hide"] = False
-    elif override is False:
-        sys_cfg["hide"] = True
-    cfg["system_apps"] = sys_cfg
-    showing = not bool(sys_cfg.get("hide", True))
-    return cfg, showing
+    showing = (not bool((cfg or {}).get("system_apps", {}).get("hide", True))
+               if override is None else override)
+    return dict(cfg or {}), showing
 
 
 def _rescan(cfg: dict, show: bool) -> list:
-    """Rescan with system apps shown/hidden (single-arg scan for mock compat)."""
+    """Rescan with system apps shown/hidden."""
     from .scanner import scan as _scan
-    new_cfg = dict(cfg or {})
-    sys_cfg = dict(new_cfg.get("system_apps", {}) or {})
-    sys_cfg["hide"] = not show
-    new_cfg["system_apps"] = sys_cfg
-    return _scan(new_cfg)
+    return _scan(cfg, show_system=show)
 
 
 def _try_rescan(cfg: dict, show: bool) -> list | None:
@@ -145,7 +140,7 @@ def main() -> None:
     override = True if args.show_system else (False if args.hide_system else None)
     if args.list:
         cfg, showing = _resolve_show_system(load_config(), override)
-        apps = scan(cfg)
+        apps = scan(cfg, show_system=override)
         if not apps:
             print("No apps discovered. Check apps.yaml paths.")
             return
@@ -169,7 +164,7 @@ def main() -> None:
         return
     if args.sync:
         cfg, _showing = _resolve_show_system(load_config(), override)
-        apps = scan(cfg)
+        apps = scan(cfg, show_system=override)
         if args.all:
             selected = {a.id: a for a in apps}
         else:
@@ -202,7 +197,7 @@ def interactive(target_dir=None, state_file=None, show_system=None) -> None:
     state_file = Path(state_file) if state_file else manager.STATE_FILE
 
     cfg, showing = _resolve_show_system(load_config(), show_system)
-    apps = scan(cfg)
+    apps = scan(cfg, show_system=show_system)
     if not apps:
         print("No apps discovered. Check apps.yaml paths.")
         return

@@ -21,7 +21,9 @@ def _fake_apps():
 
 
 def _patch_scan(monkeypatch):
-    monkeypatch.setattr("desktop_manager.scanner.scan", lambda cfg: _fake_apps())
+    """Stub scan(); accepts show_system so override flags are accepted too."""
+    monkeypatch.setattr("desktop_manager.scanner.scan",
+                        lambda cfg, show_system=None: _fake_apps())
 
 
 def test_picker_plain_ranges(capsys, monkeypatch):
@@ -158,8 +160,8 @@ def test_interactive_adopts_id_changed_selection(tmp_path, capsys, monkeypatch):
     state_file.write_text('{"file:tool": "old.desktop"}')
     monkeypatch.setattr(
         "desktop_manager.scanner.scan",
-        lambda cfg: [DiscoveredApp(id="desktop:tool", name="Tool",
-                                   exec_path="/bin/tool")])
+        lambda cfg, show_system=None: [
+            DiscoveredApp(id="desktop:tool", name="Tool", exec_path="/bin/tool")])
     monkeypatch.setattr(sys, "stdin", io.StringIO("1\n"))
     interactive(target, state_file)
     out = capsys.readouterr().out
@@ -223,3 +225,71 @@ def test_picker_plain_keeps_list_when_toggle_fails(monkeypatch, capsys):
     # The toggle must not have flipped: still "hidden" after the failure.
     assert printed.count("System apps: hidden") == 2
     assert "System apps: shown" not in printed
+
+
+# --- show_system override is passed to scan(), not smuggled via config ---
+
+
+def test_resolve_show_system_does_not_rewrite_config():
+    """The override must not be baked into system_apps.hide: scan() now
+    receives it as an argument, so the config stays as loaded."""
+    from desktop_manager.__main__ import _resolve_show_system
+    cfg = {"system_apps": {"hide": True, "allowlist": [], "blacklist": []}}
+    for override in (True, False, None):
+        out, showing = _resolve_show_system(cfg, override)
+        assert out["system_apps"]["hide"] is True, override
+        if override is not None:
+            assert showing is override
+
+
+def test_resolve_show_system_defaults_to_config():
+    from desktop_manager.__main__ import _resolve_show_system
+    _, showing = _resolve_show_system({"system_apps": {"hide": True}}, None)
+    assert showing is False
+    _, showing = _resolve_show_system({"system_apps": {"hide": False}}, None)
+    assert showing is True
+    _, showing = _resolve_show_system({}, None)      # absent -> hide = True
+    assert showing is False
+
+
+def test_rescan_passes_show_system_through(monkeypatch):
+    """_rescan must forward the flag as an argument, not rewrite the dict."""
+    from desktop_manager.__main__ import _rescan
+    seen = {}
+
+    def fake(cfg, show_system=None):
+        seen["show_system"] = show_system
+        seen["cfg"] = cfg
+        return ["x"]
+
+    monkeypatch.setattr("desktop_manager.scanner.scan", fake)
+    cfg = {"system_apps": {"hide": True}}
+    assert _rescan(cfg, True) == ["x"]
+    assert seen["show_system"] is True
+    assert seen["cfg"]["system_apps"]["hide"] is True   # untouched
+
+
+def test_list_passes_show_system_flag(monkeypatch):
+    """End to end: `met --list --show-system` reaches scan() as an argument."""
+    from desktop_manager import __main__ as m
+    seen = {}
+
+    def fake(cfg, show_system=None):
+        seen["show_system"] = show_system
+        return []
+
+    monkeypatch.setattr("desktop_manager.scanner.scan", fake)
+    monkeypatch.setattr("desktop_manager.scanner.load_config", lambda: {})
+    monkeypatch.setattr(sys, "argv", ["met", "--list", "--show-system"])
+    m.main()
+    assert seen["show_system"] is True
+
+    seen.clear()
+    monkeypatch.setattr(sys, "argv", ["met", "--list", "--hide-system"])
+    m.main()
+    assert seen["show_system"] is False
+
+    seen.clear()
+    monkeypatch.setattr(sys, "argv", ["met", "--list"])
+    m.main()
+    assert seen["show_system"] is None      # no flag -> config decides
