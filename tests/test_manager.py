@@ -273,3 +273,93 @@ def test_validate_generated_file(dirs):
     dest = manager.create_desktop(_app(), target, state)
     ok, msg = manager.validate_desktop_file(dest)
     assert ok, msg
+
+
+# --- resolve_target_dir (config target_dir) -------------------------------
+
+
+def test_resolve_target_dir_explicit_wins(dirs, monkeypatch):
+    """An explicit path short-circuits, so config is never read."""
+    target, _ = dirs
+    monkeypatch.setattr(manager, "load_config",
+                        lambda: {"target_dir": "/nonexistent/xyz"})
+    assert manager.resolve_target_dir(target) == target
+
+
+def test_resolve_target_dir_reads_config(tmp_path, monkeypatch):
+    wanted = tmp_path / "from-config"
+    wanted.mkdir()
+    monkeypatch.setattr(manager, "load_config",
+                        lambda: {"target_dir": str(wanted)})
+    assert manager.resolve_target_dir() == wanted
+
+
+def test_resolve_target_dir_expands_tilde(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(manager, "load_config",
+                        lambda: {"target_dir": "~/configured"})
+    assert manager.resolve_target_dir() == tmp_path / "configured"
+
+
+def test_resolve_target_dir_missing_config_falls_back(monkeypatch):
+    monkeypatch.setattr(manager, "load_config", lambda: {})
+    assert manager.resolve_target_dir() == manager.DEFAULT_TARGET_DIR
+
+
+def test_resolve_target_dir_warns_when_missing(tmp_path, monkeypatch, capsys):
+    """A configured dir that does not exist is a likely typo: warn loudly."""
+    missing = tmp_path / "does-not-exist"
+    monkeypatch.setattr(manager, "load_config",
+                        lambda: {"target_dir": str(missing)})
+    assert manager.resolve_target_dir() == missing
+    out = capsys.readouterr().out
+    assert "WARNING" in out
+    assert str(missing) in out
+    assert "will not read it" in out
+
+
+def test_resolve_target_dir_silent_when_configured_dir_exists(
+        tmp_path, monkeypatch, capsys):
+    existing = tmp_path / "fine"
+    existing.mkdir()
+    monkeypatch.setattr(manager, "load_config",
+                        lambda: {"target_dir": str(existing)})
+    assert manager.resolve_target_dir() == existing
+    assert "WARNING" not in capsys.readouterr().out
+
+
+# --- state file robustness ------------------------------------------------
+
+
+def test_load_state_warns_when_corrupt(tmp_path, capsys):
+    """A truncated state file must not fail silently: {} would make every
+    managed file look like an unknown orphan."""
+    bad = tmp_path / "state.json"
+    bad.write_text('{"a": "b"')  # truncated JSON
+    assert manager.load_state(bad) == {}
+    out = capsys.readouterr().out
+    assert "WARNING" in out
+    assert str(bad) in out
+
+
+def test_load_state_missing_file_is_silent(tmp_path, capsys):
+    """No state yet is the normal first run, not a problem to report."""
+    assert manager.load_state(tmp_path / "absent.json") == {}
+    assert "WARNING" not in capsys.readouterr().out
+
+
+def test_save_state_is_atomic_and_leaves_no_temp(dirs):
+    """Writes via a temp file + os.replace, so readers never see a
+    half-written state.json, and no .tmp file is left behind."""
+    target, state = dirs
+    manager.save_state({"file:vesktop": "vesktop.desktop"}, state)
+    assert json.loads(state.read_text()) == {"file:vesktop": "vesktop.desktop"}
+    assert not list(state.parent.glob("*.tmp"))
+
+
+def test_save_state_replaces_existing_completely(dirs):
+    target, state = dirs
+    manager.save_state({"old": "old.desktop"}, state)
+    manager.save_state({"new": "new.desktop"}, state)
+    assert json.loads(state.read_text()) == {"new": "new.desktop"}
+    assert "old" not in state.read_text()

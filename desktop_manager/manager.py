@@ -17,10 +17,37 @@ from pathlib import Path
 from typing import Mapping
 
 from . import generator
-from .scanner import binary_exists, exec_key
+from .scanner import binary_exists, exec_key, load_config
 
-TARGET_DIR = Path.home() / ".local" / "share" / "applications"
+DEFAULT_TARGET_DIR = Path.home() / ".local" / "share" / "applications"
+# Kept as an alias so older callers/tests importing TARGET_DIR still work.
+TARGET_DIR = DEFAULT_TARGET_DIR
 LEGACY_STATE_FILE = Path(__file__).resolve().parent.parent / "state.json"
+
+
+def resolve_target_dir(target_dir: Path | str | None = None) -> Path:
+    """Return the directory holding .desktop files.
+
+    Order: explicit argument > `target_dir` from apps.yaml > the default
+    `~/.local/share/applications`. Warns when a configured directory does
+    not exist yet, because we will create it and the app menu will not
+    read it (usually a typo in apps.yaml).
+
+    Example:
+      resolve_target_dir(tmp_path)        -> tmp_path (config not read)
+      apps.yaml target_dir: /tmp/met     -> /tmp/met
+      no config key                      -> ~/.local/share/applications
+    """
+    if target_dir:
+        return Path(target_dir).expanduser()
+    configured = str(load_config().get("target_dir") or "").strip()
+    if not configured:
+        return DEFAULT_TARGET_DIR
+    resolved = Path(configured).expanduser()
+    if not resolved.is_dir():
+        print(f"WARNING: target_dir from apps.yaml does not exist: {resolved}")
+        print("         It will be created, but your app menu will not read it.")
+    return resolved
 
 
 def _default_state_file() -> Path:
@@ -48,21 +75,44 @@ STATE_FILE = _default_state_file()
 
 
 def load_state(state_file: Path | None = None) -> dict:
+    """Read the app_id -> filename map. A missing file is normal ({}).
+
+    A file that exists but cannot be parsed (truncated, corrupt) prints a
+    warning instead of failing silently, because an empty state makes every
+    managed file on disk look like an unknown orphan.
+    """
     state_file = state_file or STATE_FILE
-    try:
-        return json.loads(Path(state_file).read_text())
-    except (OSError, ValueError):
+    p = Path(state_file)
+    if not p.exists():
         return {}
+    try:
+        data = json.loads(p.read_text())
+    except (OSError, ValueError) as e:
+        print(f"WARNING: {p} is unreadable ({e}); treating as empty.")
+        print("         Previously managed files are now unremembered, so they "
+              "will be\n         reported as 'no longer discovered' rather than "
+              "tracked. Move it\n         aside to reset state, or restore it "
+              "from a backup.")
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def save_state(state: dict, state_file: Path | None = None) -> None:
+    """Write the map atomically: write a temp file, then rename over it.
+
+    A plain write_text() truncates first, so an interrupted write leaves a
+    half-written file. os.replace() within one directory is a single atomic
+    step, so readers only ever see the complete old or complete new file.
+    """
     state_file = state_file or STATE_FILE
     p = Path(state_file)
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
     except OSError:
         pass
-    p.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
+    os.replace(tmp, p)
 
 
 def _is_managed_file(path: Path) -> bool:
@@ -232,7 +282,7 @@ def create_desktop(app, target_dir: Path | None = None,
     _ensure_executable(exec_path)
     content = generator.build_desktop_content(name, exec_path, icon=icon)
 
-    target_dir = Path(target_dir).expanduser() if target_dir else TARGET_DIR
+    target_dir = resolve_target_dir(target_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
 
     state = load_state(state_file)
@@ -261,7 +311,7 @@ def create_desktop(app, target_dir: Path | None = None,
 def remove_desktop(app_id: str, target_dir: Path | None = None,
                    state_file: Path | None = None) -> bool:
     """Delete our managed file for app_id. Returns True if something was removed."""
-    target_dir = Path(target_dir).expanduser() if target_dir else TARGET_DIR
+    target_dir = resolve_target_dir(target_dir)
     state = load_state(state_file)
     removed = False
     filename = state.pop(app_id, None)
@@ -293,7 +343,7 @@ def sync(selected: Mapping, target_dir: Path | None = None,
     from one that is merely unscanned. `made_executable` lists AppImage
     paths that were given `+x` during this sync.
     """
-    target_dir = Path(target_dir).expanduser() if target_dir else TARGET_DIR
+    target_dir = resolve_target_dir(target_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
     state = load_state(state_file)
 
@@ -384,7 +434,7 @@ def sync(selected: Mapping, target_dir: Path | None = None,
 
 def managed_files(target_dir: Path | None = None) -> list[Path]:
     """List all files in target_dir carrying our managed marker."""
-    target_dir = Path(target_dir).expanduser() if target_dir else TARGET_DIR
+    target_dir = resolve_target_dir(target_dir)
     if not target_dir.is_dir():
         return []
     return [p for p in target_dir.glob("*.desktop") if _is_managed_file(p)]

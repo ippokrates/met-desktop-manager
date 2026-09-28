@@ -167,3 +167,59 @@ def test_interactive_adopts_id_changed_selection(tmp_path, capsys, monkeypatch):
     assert "adopted" in out
     import json
     assert json.loads(state_file.read_text()) == {"desktop:tool": "old.desktop"}
+
+
+# --- system-apps toggle must not desync when rescan fails -----------------
+
+
+def test_try_rescan_returns_none_on_failure(monkeypatch, capsys):
+    """A raising scan() must surface, not be swallowed: the caller would
+    otherwise flip the toggle while the list stayed stale."""
+    import desktop_manager.__main__ as m
+
+    def boom(cfg, show):
+        raise RuntimeError("scan exploded")
+
+    monkeypatch.setattr(m, "_rescan", boom)
+    assert m._try_rescan({}, True) is None
+    out = capsys.readouterr().out
+    assert "Rescan failed, list unchanged" in out
+    assert "scan exploded" in out
+
+
+def test_try_rescan_returns_list_on_success(monkeypatch):
+    import desktop_manager.__main__ as m
+    monkeypatch.setattr(m, "_rescan", lambda cfg, show: ["app-one"])
+    assert m._try_rescan({}, True) == ["app-one"]
+
+
+def test_try_rescan_without_cfg_is_none():
+    """No config means the toggle is not wired up; nothing to do."""
+    from desktop_manager.__main__ import _try_rescan
+    assert _try_rescan(None, True) is None
+
+
+def test_picker_plain_keeps_list_when_toggle_fails(monkeypatch, capsys):
+    """The real regression: before the fix, a failed rescan still flipped
+    the toggle and printed 'shown', so the message lied about the list.
+    On failure both the list and the toggle must stay put."""
+    import desktop_manager.__main__ as m
+
+    def boom(cfg, show):
+        raise RuntimeError("scan exploded")
+
+    monkeypatch.setattr(m, "_rescan", boom)
+    monkeypatch.setattr("desktop_manager.scanner.group_by_directory",
+                        lambda apps: {"g": list(apps)})
+    prompts = iter(["s", "1"])
+    monkeypatch.setattr("builtins.input", lambda _="": next(prompts))
+
+    # Prompt 1 is 's' (toggle, rescan fails), prompt 2 is '1' (select from
+    # the unchanged list), so the result is the original first app.
+    picked = m._picker_plain(_fake_apps(), {}, cfg={}, show_system=False)
+    assert picked == {"a1"}
+    printed = capsys.readouterr().out
+    assert "Rescan failed" in printed
+    # The toggle must not have flipped: still "hidden" after the failure.
+    assert printed.count("System apps: hidden") == 2
+    assert "System apps: shown" not in printed
