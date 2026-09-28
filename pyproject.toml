@@ -18,6 +18,7 @@ dev = ["pytest>=8.0"]
 
 [project.scripts]
 desktop-manager = "desktop_manager.__main__:main"
+met = "desktop_manager.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

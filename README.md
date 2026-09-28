@@ -61,6 +61,9 @@ box. In pipes/SSH mode type `s` at the numbers prompt. Override in
 Without pipx, prefix with the venv python:
 `.venv/bin/python -m desktop_manager --list`.
 
+`met` is a short alias for `desktop-manager`: same flags, less typing
+(e.g. `met --list`). It appears after `pipx reinstall met-desktop-manager`.
+
 In non-terminal environments (pipes, SSH without TTY) the picker falls
 back to a numbered prompt accepting ranges like `1,3,5-9`.
 

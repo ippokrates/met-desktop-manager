@@ -1,11 +1,12 @@
 """Interactive CLI entry point."""
 import argparse
+import os
 import sys
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="desktop-manager",
+        prog=os.path.basename(sys.argv[0]) or "desktop-manager",
         description="Manage .desktop files in ~/.local/share/applications",
     )
     p.add_argument("--list", action="store_true", help="List discovered apps")
