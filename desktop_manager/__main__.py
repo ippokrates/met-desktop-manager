@@ -161,14 +161,11 @@ def main() -> None:
     if args.create:
         if not args.exec_path:
             parser.error("--create NAME requires --exec PATH")
-        fixed = manager._ensure_executable(args.exec_path)
         dest = manager.create_desktop(
             {"id": args.create.lower(), "name": args.create,
              "exec_path": args.exec_path, "icon": args.icon})
         ok, msg = manager.validate_desktop_file(dest)
         print(f"Created {dest} (valid={ok}: {msg})")
-        if fixed:
-            print(f"made executable: {fixed}")
         return
     if args.sync:
         cfg, _showing = _resolve_show_system(load_config(), override)
