@@ -51,6 +51,8 @@ Requirements: Python 3.12+, `questionary`, `rich`, `pyyaml`
 | `desktop-manager --create "Google Chrome" --exec /opt/google/chrome/google-chrome` | One-off launcher, no picker |
 | `desktop-manager --sync --all` | Launcher for everything found, no questions asked |
 | `desktop-manager --list --show-system` | Include hidden system launchers (`--show-system` also works with bare `desktop-manager` and `--sync --all`; `--hide-system` forces hiding) |
+| `desktop-manager --export backup.json` | Save managed entries to a JSON file |
+| `desktop-manager --import backup.json` | Restore managed entries from that file |
 
 System launchers (settings panels, helpers, session pieces) hide by
 default via a shared list plus a `Categories=` fallback. In the picker,
@@ -133,6 +135,21 @@ target_dir: ~/.local/share/applications
 
 `/usr/bin` stays excluded on purpose (2,400+ CLI tools would flood the
 picker). Re-add it if you ever want everything listed.
+
+## Backup (`--export` / `--import`)
+
+Move to a new distro and keep the same launchers:
+
+```bash
+desktop-manager --export backup.json   # on the old machine
+desktop-manager --import backup.json   # on the new machine
+```
+
+The file holds one entry per managed launcher (`app_id`, `filename`,
+full file text). Home paths are stored portable (`~/...`) and expanded
+to the new home on import. Handmade files are never overwritten (ours
+gets a `-2` sibling). A renamed `/opt` dir cannot be fixed automatically
+and shows as Broken until you fix the `Exec=` path.
 
 ## Test
 

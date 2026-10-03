@@ -1,5 +1,6 @@
 """Interactive CLI entry point."""
 import argparse
+import json
 import os
 import sys
 
@@ -19,6 +20,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Include hidden system launchers for this run")
     p.add_argument("--hide-system", action="store_true",
                    help="Hide system launchers (default, overrides --show-system off)")
+    p.add_argument("--export", metavar="FILE",
+                   help="Export managed entries to a JSON file")
+    p.add_argument("--import", dest="import_file", metavar="FILE",
+                   help="Import managed entries from a JSON file")
     return p
 
 
@@ -194,6 +199,40 @@ def main() -> None:
             _print_vanished(result["vanished"],
                             "Kept, no longer discovered (not deleted):")
             sys.exit(1)
+        return
+    if args.export:
+        from pathlib import Path
+        data = manager.export_managed()
+        dest = Path(args.export).expanduser()
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        dest.write_text(json.dumps(data, indent=2, sort_keys=False) + "\n")
+        print(f"Exported {len(data['entries'])} app(s) to {dest}")
+        return
+    if args.import_file:
+        from pathlib import Path
+        src = Path(args.import_file).expanduser()
+        try:
+            data = json.loads(src.read_text())
+        except OSError as e:
+            parser.error(f"cannot read {src}: {e}")
+        except ValueError as e:
+            parser.error(f"invalid JSON in {src}: {e}")
+        try:
+            result = manager.import_managed(data)
+        except ValueError as e:
+            parser.error(str(e))
+        wrote, skipped = result["wrote"], result["skipped"]
+        print(f"Imported {len(wrote)} app(s), skipped {len(skipped)}.")
+        for f in wrote:
+            ok, msg = manager.validate_desktop_file(
+                manager.resolve_target_dir() / f)
+            print(f"  {f}: {'valid' if ok else 'INVALID: ' + msg}")
+        for s in skipped:
+            print(f"  skipped {s.get('app_id') or '?'} "
+                  f"({s.get('filename') or '?'}): {s.get('reason')}")
         return
     interactive(show_system=override)
 

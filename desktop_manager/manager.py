@@ -440,6 +440,199 @@ def managed_files(target_dir: Path | None = None) -> list[Path]:
     return [p for p in target_dir.glob("*.desktop") if _is_managed_file(p)]
 
 
+# --- export / import (portable backup) -------------------------------------
+
+# .desktop keys holding a path that may live under $HOME. Only these lines
+# get the `~` rewrite; Name=/Comment= never do (a `~` there is literal).
+_PATH_KEYS = ("Exec=", "Icon=", "Path=")
+
+
+def _portable_value(value: str, home: str) -> str:
+    """Replace a $HOME prefix with `~` (export direction).
+
+    Works on full Exec= lines, so `mullvad-exclude /home/u/app --flag`
+    and quoted `"/home/u/My App/run"` both rewrite. Icon names
+    (`vesktop`) and `flatpak run ...` lines contain no home prefix and
+    pass through untouched.
+    """
+    home = (home or "").rstrip("/")
+    if not home or home == "~":
+        return value
+    out = value.replace(home + "/", "~/")
+    if out == value and value == home:
+        return "~"
+    out = out.replace('"' + home + '"', '"~"').replace("'" + home + "'", "'~'")
+    return out
+
+
+def _restore_value(value: str, home: str) -> str:
+    """Replace `~` with the current $HOME (import direction)."""
+    home = (home or "").rstrip("/")
+    if not home:
+        return value
+    out = value.replace("~/", home + "/")
+    if out == value and value == "~":
+        return home
+    out = out.replace('"~"', '"' + home + '"').replace("'~'", "'" + home + "'")
+    return out
+
+
+def _portable_text(text: str, home: str) -> str:
+    """Export rewrite for one file's text. Import uses _restore_text."""
+    lines = []
+    for line in (text or "").splitlines():
+        for key in _PATH_KEYS:
+            if line.startswith(key):
+                lines.append(key + _portable_value(line[len(key):], home))
+                break
+        else:
+            lines.append(line)
+    trailing = "\n" if (text or "").endswith("\n") else ""
+    return "\n".join(lines) + trailing
+
+
+def _restore_text(text: str, home: str) -> str:
+    """Import rewrite for one file's text. Reverse of _portable_text."""
+    lines = []
+    for line in (text or "").splitlines():
+        for key in _PATH_KEYS:
+            if line.startswith(key):
+                lines.append(key + _restore_value(line[len(key):], home))
+                break
+        else:
+            lines.append(line)
+    trailing = "\n" if (text or "").endswith("\n") else ""
+    return "\n".join(lines) + trailing
+
+
+def _safe_import_filename(raw: str) -> str:
+    """Clean basename or '' when unsafe (never write outside target_dir).
+
+    Examples:
+      "vesktop.desktop" -> "vesktop.desktop"
+      "../evil.desktop" -> ""
+    """
+    name = (raw or "").strip()
+    if not name or not name.endswith(".desktop"):
+        return ""
+    base = Path(name).name
+    if base != name or base == ".desktop" or ".." in base:
+        return ""
+    if "/" in base or "\\" in base:
+        return ""
+    return base
+
+
+def export_managed(target_dir: Path | None = None,
+                   state_file: Path | None = None,
+                   home: str | None = None) -> dict:
+    """Bundle every managed file into `{"entries": [...]}` (files only).
+
+    Each entry is `{"app_id", "filename", "content"}` where content has
+    the $HOME prefix replaced with `~`, so the bundle survives a move to
+    a distro with a different username. `flatpak run ...` lines pass
+    through untouched. State entries with no managed file on disk are
+    skipped; stray managed files unknown to state get an
+    `imported:<stem>` id so nothing managed is silently dropped.
+    """
+    target_dir = resolve_target_dir(target_dir)
+    state = load_state(state_file)
+    home = str(Path.home()) if home is None else str(home)
+    by_file: dict[str, str] = {}
+    for app_id, filename in state.items():
+        if filename and filename not in by_file:
+            by_file[str(filename)] = str(app_id)
+    entries = []
+    for path in sorted(managed_files(target_dir), key=lambda p: p.name):
+        try:
+            text = path.read_text(errors="ignore")
+        except OSError:
+            continue
+        app_id = by_file.get(path.name)
+        if not app_id:
+            app_id = f"imported:{path.name[:-len('.desktop')]}"
+            i = 2
+            while app_id in {e["app_id"] for e in entries} or app_id in state:
+                app_id = f"imported:{path.name[:-len('.desktop')]}-{i}"
+                i += 1
+        entries.append({"app_id": app_id, "filename": path.name,
+                        "content": _portable_text(text, home)})
+    return {"entries": entries}
+
+
+def import_managed(data: Mapping, target_dir: Path | None = None,
+                   state_file: Path | None = None,
+                   home: str | None = None) -> dict:
+    """Write a bundle from export_managed() back to disk.
+
+    Returns `{"wrote": [filenames], "skipped": [{"app_id", "filename",
+    "reason"}]}`. Entries whose content lacks the managed marker are
+    skipped (never write unmanaged text). A stored filename taken by a
+    handmade file gets a `-2` sibling; the handmade file always survives.
+    `~` in Exec=/Icon=/Path= expands to the current $HOME; anything
+    still missing (e.g. a renamed /opt dir) is written as-is and shows
+    as Broken on the next sync.
+    """
+    if not isinstance(data, Mapping) or not isinstance(
+            data.get("entries"), list):
+        raise ValueError("bundle must be {entries: [...]}")
+    target_dir = resolve_target_dir(target_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    home = str(Path.home()) if home is None else str(home)
+    state = load_state(state_file)
+    wrote, skipped = [], []
+    for entry in data["entries"]:
+        app_id = str(entry.get("app_id", "")).strip() if isinstance(
+            entry, Mapping) else ""
+        raw_name = entry.get("filename", "") if isinstance(
+            entry, Mapping) else ""
+        content = entry.get("content", "") if isinstance(
+            entry, Mapping) else ""
+        if not app_id or not isinstance(content, str) or not content:
+            skipped.append({"app_id": app_id, "filename": str(raw_name),
+                            "reason": "missing app_id/content"})
+            continue
+        if not generator.is_managed_content(content):
+            skipped.append({"app_id": app_id, "filename": str(raw_name),
+                            "reason": "not managed, skipped"})
+            continue
+        filename = _safe_import_filename(str(raw_name))
+        if not filename:
+            skipped.append({"app_id": app_id, "filename": str(raw_name),
+                            "reason": "unsafe filename"})
+            continue
+        text = _restore_text(content, home)
+        dest = target_dir / filename
+        if dest.exists():
+            try:
+                if dest.is_file() and _is_managed_file(dest):
+                    pass  # ours: overwrite below
+                else:
+                    stem = filename[:-len(".desktop")]
+                    dest = target_dir / generator.unique_filename(
+                        target_dir, stem)
+            except OSError:
+                skipped.append({"app_id": app_id, "filename": filename,
+                                "reason": "unreadable target"})
+                continue
+        try:
+            dest.write_text(text)
+            try:
+                dest.chmod(0o644)
+            except OSError:
+                pass
+        except OSError as e:
+            skipped.append({"app_id": app_id, "filename": filename,
+                            "reason": f"write failed: {e}"})
+            continue
+        state[app_id] = dest.name
+        wrote.append(dest.name)
+    save_state(state, state_file)
+    if wrote:
+        _refresh_desktop_db(target_dir)
+    return {"wrote": wrote, "skipped": skipped}
+
+
 def _refresh_desktop_db(target_dir: Path) -> None:
     updater = shutil.which("update-desktop-database")
     if updater is None:
