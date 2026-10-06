@@ -112,11 +112,8 @@ def load_config(path: str | Path | None = None) -> dict:
 
 
 def _read_config_file(p: Path) -> dict:
+    import yaml  # required dependency, fails fast if the install is broken
     if not p.is_file():
-        return {}
-    try:
-        import yaml  # PyYAML (in requirements.txt)
-    except ImportError:
         return {}
     try:
         return yaml.safe_load(p.read_text()) or {}

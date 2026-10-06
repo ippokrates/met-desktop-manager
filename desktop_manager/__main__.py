@@ -4,6 +4,8 @@ import json
 import os
 import sys
 
+from rich.console import Console
+
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -27,35 +29,20 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _group_console():
-    """Rich console for headers, or None when rich is missing."""
-    try:
-        from rich.console import Console
-        return Console()
-    except ImportError:
-        return None
-
-
-def _print_group_header(group_key: str, count: int, console=None) -> None:
+def _print_group_header(group_key: str, count: int, console) -> None:
     """One-line header: bold folder name + dimmed full path + count.
 
     Example: `  Vesktop  /opt/Vesktop  (1 app)`
-    Plain print fallback when rich is unavailable (pipes/SSH).
     """
+    from rich.markup import escape
+
     from .scanner import group_base_name, short_group_path
 
     base = group_base_name(group_key)
     short = short_group_path(group_key)
     noun = "app" if count == 1 else "apps"
-    if console is None:
-        print(f"  {base}  {short}  ({count} {noun})")
-        return
-    try:
-        from rich.markup import escape
-        console.print(f"  [bold]{escape(base)}[/bold] "
-                      f"[dim]{escape(short)} ({count} {noun})[/dim]")
-    except Exception:
-        print(f"  {base}  {short}  ({count} {noun})")
+    console.print(f"  [bold]{escape(base)}[/bold] "
+                  f"[dim]{escape(short)} ({count} {noun})[/dim]")
 
 
 def _split_vanished(vanished: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -166,7 +153,7 @@ def main() -> None:
         if not apps:
             print("No apps discovered. Check apps.yaml paths.")
             return
-        console = _group_console()
+        console = Console()
         for group_key, g_apps in group_by_directory(apps).items():
             _print_group_header(group_key, len(g_apps), console)
             for app in g_apps:
@@ -290,16 +277,13 @@ def interactive(target_dir=None, state_file=None, show_system=None) -> None:
                         "No longer discovered, will be KEPT (not deleted):")
     prune = False
     if sys.stdin.isatty():
-        try:
-            import questionary
-            if not questionary.confirm("Apply these changes?", default=True).ask():
-                print("Cancelled, nothing changed.")
-                return
-            if vanished and questionary.confirm(
-                    "Also DELETE the broken/kept files above?", default=False).ask():
-                prune = True
-        except ImportError:
-            pass
+        import questionary
+        if not questionary.confirm("Apply these changes?", default=True).ask():
+            print("Cancelled, nothing changed.")
+            return
+        if vanished and questionary.confirm(
+                "Also DELETE the broken/kept files above?", default=False).ask():
+            prune = True
 
     result = manager.sync(selected, target_dir, state_file,
                           discovered={a.id: a for a in apps},
@@ -344,11 +328,8 @@ def _picker_tty(apps, state, preticked: set[str] | None = None,
     Typing `!sys` in the filter box does the same. `_final["apps"]`
     receives the list backing the returned picks (after toggles).
     """
-    try:
-        import questionary
-        from questionary import Choice, Separator
-    except ImportError:
-        return _picker_plain(apps, state, preticked, cfg, show_system, _final)
+    import questionary
+    from questionary import Choice, Separator
 
     picked: set[str] = set(preticked) if preticked is not None else {
         a.id for a in apps if a.id in state}
@@ -443,7 +424,7 @@ def _picker_plain(apps, state, preticked: set[str] | None = None,
     while True:
         groups = group_by_directory(cur_apps)
         ordered = [a for g_apps in groups.values() for a in g_apps]
-        console = _group_console()
+        console = Console()
         n = 0
         for group_key, g_apps in groups.items():
             _print_group_header(group_key, len(g_apps), console)
@@ -507,27 +488,20 @@ def _print_summary(result: dict, manager, target_dir) -> None:
     for v in kept:
         print(f"kept (no longer discovered, not deleted): {v['filename']}"
               f" ({v['binary'] or 'unknown binary'})")
-    try:
-        from rich.console import Console
-        from rich.table import Table
-        console = Console()
-        table = Table(title="Desktop files synced")
-        table.add_column("Action")
-        table.add_column("File")
-        table.add_column("Valid")
-        for f in created:
-            ok, msg = manager.validate_desktop_file(
-                target_dir / f)
-            table.add_row("created/updated", f,
-                          "yes" if ok else f"NO: {msg}")
-        for f in removed:
-            table.add_row("removed", f, "-")
-        console.print(table)
-    except ImportError:
-        for f in created:
-            print(f"created/updated: {f}")
-        for f in removed:
-            print(f"removed: {f}")
+    from rich.table import Table
+    console = Console()
+    table = Table(title="Desktop files synced")
+    table.add_column("Action")
+    table.add_column("File")
+    table.add_column("Valid")
+    for f in created:
+        ok, msg = manager.validate_desktop_file(
+            target_dir / f)
+        table.add_row("created/updated", f,
+                      "yes" if ok else f"NO: {msg}")
+    for f in removed:
+        table.add_row("removed", f, "-")
+    console.print(table)
 
 
 if __name__ == "__main__":
