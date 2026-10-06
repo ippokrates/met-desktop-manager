@@ -18,7 +18,7 @@ X-Managed-By=met-desktop-manager
 
 ## Install
 
-**Daily use** (global `desktop-manager` command):
+**Daily use** (global `desktop-manager` or `met` command):
 
 ```bash
 git clone https://github.com/ippokrates/met-desktop-manager.git

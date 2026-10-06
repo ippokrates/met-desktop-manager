@@ -1,3 +1,4 @@
+# mirror of pyproject.toml dependencies, keep in sync
 questionary>=2.0
 rich>=13.0
 pyyaml>=6.0
