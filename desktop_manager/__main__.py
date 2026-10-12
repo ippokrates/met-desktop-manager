@@ -6,6 +6,10 @@ import sys
 
 from rich.console import Console
 
+# Prompt prefix shown in front of every questionary question.
+# One place owns the symbol, so changing it later means editing one line.
+PROMPT_MARK = "❯"
+
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -278,11 +282,13 @@ def interactive(target_dir=None, state_file=None, show_system=None) -> None:
     prune = False
     if sys.stdin.isatty():
         import questionary
-        if not questionary.confirm("Apply these changes?", default=True).ask():
+        if not questionary.confirm("Apply these changes?", default=True,
+                                       qmark=PROMPT_MARK).ask():
             print("Cancelled, nothing changed.")
             return
         if vanished and questionary.confirm(
-                "Also DELETE the broken/kept files above?", default=False).ask():
+                "Also DELETE the broken/kept files above?", default=False,
+                qmark=PROMPT_MARK).ask():
             prune = True
 
     result = manager.sync(selected, target_dir, state_file,
@@ -343,7 +349,8 @@ def _picker_tty(apps, state, preticked: set[str] | None = None,
     base_for = _rebuild_base()
     while True:
         filt = questionary.text(
-            "Filter apps (substring of name/path, Enter = show all):").ask()
+            "Filter apps (substring of name/path, Enter = show all):",
+            qmark=PROMPT_MARK).ask()
         if filt is None:  # Ctrl-C
             return None
         filt = filt.strip()
@@ -382,7 +389,8 @@ def _picker_tty(apps, state, preticked: set[str] | None = None,
         ]
         answer = questionary.checkbox(
             "Select apps:", choices=choices,
-            instruction="(Space on first row toggles system apps)").ask()
+            instruction="(Space on first row toggles system apps)",
+            qmark=PROMPT_MARK).ask()
         if answer is None:  # Ctrl-C
             return None
         if TOGGLE_SYSTEM_VALUE in answer:
@@ -398,7 +406,7 @@ def _picker_tty(apps, state, preticked: set[str] | None = None,
         picked = (picked - {a.id for a in candidates}) | set(answer)
         more = questionary.confirm(
             f"{len(picked)} selected. Filter again to add more?",
-            default=False).ask()
+            default=False, qmark=PROMPT_MARK).ask()
         if not more:
             if _final is not None:
                 _final["apps"] = cur_apps
