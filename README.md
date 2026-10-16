@@ -189,14 +189,6 @@ met --export backup.json        # old machine
 met --import backup.json        # new machine, then run `met` once
 ```
 
-### Scripting
-
-```bash
-#!/bin/bash
-# sync everything except system launchers, non-interactively
-met --sync --all || echo "vanished apps reported, see above"
-```
-
 ## 🐛 Troubleshooting
 
 ### Command not found (after code changes)

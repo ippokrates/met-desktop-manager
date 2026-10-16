@@ -46,7 +46,6 @@ excludes:
   - chrome-sandbox
   - crashpad
   - fsnotifier
-  - abicheck
   - "*.so*"
   - "*.jar"
   - "*.img"
