@@ -123,6 +123,17 @@ Restore managed entries from that file. Handmade files are never overwritten
 met --import backup.json
 ```
 
+#### `met --check-updates`
+Compare the installed version with the version on GitHub main.
+
+```bash
+met --check-updates
+```
+
+Interactive sessions also auto-check quietly after finishing and print a
+one-line hint when a newer version exists. `--sync --all` and `--list`
+never fetch anything.
+
 ## ⚙️ Configuration (`apps.yaml`)
 
 First found wins: `~/.config/desktop-manager/apps.yaml`, then the repo's

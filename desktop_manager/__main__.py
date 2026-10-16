@@ -30,6 +30,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Export managed entries to a JSON file")
     p.add_argument("--import", dest="import_file", metavar="FILE",
                    help="Import managed entries from a JSON file")
+    p.add_argument("--check-updates", action="store_true",
+                   help="Compare installed version with GitHub")
     return p
 
 
@@ -151,6 +153,10 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
     override = True if args.show_system else (False if args.hide_system else None)
+    if args.check_updates:
+        from . import updatecheck
+        updatecheck.manual_check()
+        return
     if args.list:
         cfg, showing = _resolve_show_system(load_config(), override)
         apps = scan(cfg, show_system=override)
@@ -238,6 +244,7 @@ def interactive(target_dir=None, state_file=None, show_system=None) -> None:
     from pathlib import Path
 
     from . import manager
+    from . import updatecheck
     from .scanner import load_config, scan
 
     target_dir = manager.resolve_target_dir(target_dir)
@@ -295,6 +302,7 @@ def interactive(target_dir=None, state_file=None, show_system=None) -> None:
                           discovered={a.id: a for a in apps},
                           prune_vanished=prune)
     _print_summary(result, manager, target_dir)
+    updatecheck.auto_check()
 
 
 def _preticked_ids(apps, state, target_dir) -> set[str]:
