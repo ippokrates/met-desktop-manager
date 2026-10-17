@@ -313,7 +313,7 @@ def interactive(target_dir=None, state_file=None, show_system=None) -> None:
             print("Cancelled, nothing changed.")
             return
         if vanished and questionary.confirm(
-                "Also DELETE the broken/kept files above?", default=False,
+                "Also DELETE the broken/kept files above?", default=True,
                 qmark=PROMPT_MARK).ask():
             prune = True
 
