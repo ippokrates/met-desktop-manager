@@ -106,6 +106,18 @@ met --sync --all
 Vanished apps (no longer discovered) are reported and kept, never deleted
 silently; the command exits non-zero instead.
 
+#### `met run APP-ID [ARGS]`
+Launch a managed app by app id. This is what AppImage launchers call from
+their `Exec=` line (see [Self-updating AppImages](#self-updating-appimages));
+you rarely need it by hand. Extra arguments are forwarded to the app.
+
+```bash
+met run file:openchamber-1.2.2
+
+# show what would be launched, without launching it
+met run --resolve file:openchamber-1.2.2
+```
+
 ### Utility Commands
 
 #### `met --export FILE`
@@ -180,6 +192,34 @@ export XDG_DATA_HOME=/custom/data            # $XDG_DATA_HOME/desktop-manager/st
 - Missing apps show as Broken when the program is gone and Kept when it
   is still on disk; deleting them needs an explicit extra confirmation.
 
+### Self-updating AppImages
+
+An app that replaces its own file on update (`OpenChamber-1.2.2.AppImage` →
+`OpenChamber-1.2.3.AppImage`) would leave a launcher pointing at a deleted
+file. AppImage launchers therefore name an app id instead of the file:
+
+```ini
+Exec=/home/you/.local/bin/desktop-manager run file:openchamber-1.2.2
+X-Met-Binary=/home/you/Downloads/OpenChamber-1.2.2.AppImage
+```
+
+`met run` resolves the app at launch time. It uses `X-Met-Binary`, and when
+that file is gone it adopts the newest `.AppImage` whose name matches minus
+the version, then re-points the launcher and the state. Newest is decided by
+*modification time*, never by name: `app-1.9.0` beats `app-1.10.2` as text,
+which is wrong, and `2.2a` vs `2.2.1` has no universal answer. The updater
+wrote the new file last, so its mtime wins.
+
+Because the state is re-pointed too, the picker shows the app **still
+ticked** after an update instead of a broken old row plus a new unticked
+one. Running `met` also does this work up front: it repairs a launcher whose
+file was already replaced, and converts a still-working AppImage launcher to
+this form so a future update cannot break it.
+
+Plain binaries, flatpak and snap launchers keep their direct `Exec=`. They
+keep working even if this tool is uninstalled, and only AppImages depend on
+`met run`.
+
 ## 📊 Examples
 
 ### Move to a new distro
@@ -206,6 +246,17 @@ to start clean, or restore it from a backup.
 ### [needs chmod +x] tag on an AppImage
 met adds the exec bit itself on the next sync. Reported apps appear
 in the summary as `made executable`.
+
+### AppImage icon does nothing after an update
+The app replaced its own file (or was renamed). Run `met`: it re-links the
+launcher to the newest matching AppImage. To see what a launcher points at:
+
+```bash
+met run --resolve file:openchamber-1.2.2
+```
+
+If it prints nothing, the file was renamed rather than version-bumped: untick
+the old entry and tick the new one once.
 
 ## 🤝 Contributing
 

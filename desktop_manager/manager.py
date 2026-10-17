@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Mapping
 
 from . import generator
-from .scanner import binary_exists, exec_key, load_config
+from .scanner import binary_exists, exec_key, is_appimage_path, load_config
 
 DEFAULT_TARGET_DIR = Path.home() / ".local" / "share" / "applications"
 # Kept as an alias so older callers/tests importing TARGET_DIR still work.
@@ -275,19 +275,53 @@ def _new_managed_dest(target_dir: Path, name: str, source_desktop: str) -> Path:
     return target_dir / generator.unique_filename(target_dir, name)
 
 
+def _route_for(app_id: str, exec_path: str) -> tuple[list[str], str, str]:
+    """Router bits for one launcher, or ([], "", "") for non-AppImages.
+
+    Routed AppImages survive their own updates: the Exec line names an app
+    id and `X-Met-Binary` records the file, both re-pointed by the router
+    when the updater replaces the file.
+    """
+    if not is_appimage_path(exec_path):
+        return [], "", ""
+    from . import router  # local import: router imports this module
+
+    cmd = router.met_cmd()
+    if not cmd:
+        return [], "", ""
+    return cmd, app_id, exec_path
+
+
+def _routed_name(name: str, exec_path: str) -> str:
+    """Menu label for an AppImage without its version.
+
+    Example:
+      "OpenChamber-1.2.2" -> "OpenChamber"  (so the label never goes stale)
+    """
+    if not is_appimage_path(exec_path):
+        return name
+    from . import router
+
+    return router.strip_version(name) or name
+
+
 def create_desktop(app, target_dir: Path | None = None,
                    state_file: Path | None = None) -> Path:
     """Create (or refresh) the .desktop file for one app. Returns its path."""
     name, exec_path, icon = _app_fields(app)
+    app_id = app.get("id", name) if isinstance(app, Mapping) else (
+        getattr(app, "id", name))
+    name = _routed_name(name, exec_path)
     _ensure_executable(exec_path)
-    content = generator.build_desktop_content(name, exec_path, icon=icon)
+    route_cmd, route_id, met_binary = _route_for(app_id, exec_path)
+    content = generator.build_desktop_content(
+        name, exec_path, icon=icon,
+        route_cmd=route_cmd, route_id=route_id, met_binary=met_binary)
 
     target_dir = resolve_target_dir(target_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
 
     state = load_state(state_file)
-    app_id = app.get("id", name) if isinstance(app, Mapping) else (
-        getattr(app, "id", name))
 
     # Reuse our previous file for this app if it still exists.
     existing = state.get(app_id)
@@ -371,10 +405,14 @@ def sync(selected: Mapping, target_dir: Path | None = None,
 
     for app_id, app in selected.items():
         name, exec_path, icon = _app_fields(app)
+        name = _routed_name(name, exec_path)
         fixed = _ensure_executable(exec_path)
         if fixed and fixed not in made_executable:
             made_executable.append(fixed)
-        content = generator.build_desktop_content(name, exec_path, icon=icon)
+        route_cmd, route_id, met_binary = _route_for(app_id, exec_path)
+        content = generator.build_desktop_content(
+            name, exec_path, icon=icon,
+            route_cmd=route_cmd, route_id=route_id, met_binary=met_binary)
         filename = state.get(app_id)
         dest = (target_dir / filename) if filename else None
         if dest and dest.is_file() and _is_managed_file(dest):

@@ -148,6 +148,74 @@ def test_preticked_ids_match_by_binary(tmp_path):
     assert _preticked_ids(apps, state, target) == {"desktop:fake"}
 
 
+def test_interactive_relinks_replaced_appimage(tmp_path, capsys, monkeypatch):
+    """An update that replaced the AppImage is repaired at picker startup."""
+    import json
+
+    from desktop_manager.__main__ import interactive
+    target, dl = tmp_path / "apps", tmp_path / "dl"
+    target.mkdir()
+    dl.mkdir()
+    (target / "app.desktop").write_text(
+        "[Desktop Entry]\nName=App (Excluded)\n"
+        f"Exec=mullvad-exclude {dl}/app-1.2.2.AppImage\n"
+        "Type=Application\nX-Managed-By=met-desktop-manager\n")
+    fresh = dl / "app-1.2.3.AppImage"
+    fresh.write_bytes(b"\x7fELF" + b"\x00" * 60)
+    state_file = tmp_path / "state.json"
+    state_file.write_text('{"file:app-1.2.2": "app.desktop"}')
+
+    monkeypatch.setattr(
+        "desktop_manager.scanner.scan",
+        lambda cfg, show_system=None: [
+            DiscoveredApp(id="file:app-1.2.3", name="App-1.2.3",
+                          exec_path=str(fresh))])
+    monkeypatch.setattr(sys, "stdin", io.StringIO("1\n"))
+    interactive(target, state_file)
+
+    out = capsys.readouterr().out
+    assert "re-linked file:app-1.2.2 -> app-1.2.3.AppImage" in out
+    assert "broken" not in out.lower()
+    # the tick travelled: discovery id == renamed state key
+    assert json.loads(state_file.read_text()) == {"file:app-1.2.3": "app.desktop"}
+    assert "run file:app-1.2.3" in (target / "app.desktop").read_text()
+
+
+def test_sync_all_heals_replaced_appimage_before_creating(
+        tmp_path, monkeypatch, capsys):
+    """`--sync --all` must not add a second launcher for a replaced AppImage."""
+    from desktop_manager import manager
+    from desktop_manager.__main__ import main
+
+    target, dl = tmp_path / "apps", tmp_path / "dl"
+    target.mkdir()
+    dl.mkdir()
+    (target / "app.desktop").write_text(
+        "[Desktop Entry]\nName=App (Excluded)\n"
+        f"Exec=mullvad-exclude {dl}/app-1.2.2.AppImage\n"
+        "Type=Application\nX-Managed-By=met-desktop-manager\n")
+    fresh = dl / "app-1.2.3.AppImage"
+    fresh.write_bytes(b"\x7fELF" + b"\x00" * 60)
+    state_file = tmp_path / "state.json"
+    state_file.write_text('{"file:app-1.2.2": "app.desktop"}')
+
+    monkeypatch.setattr(manager, "resolve_target_dir", lambda *a: target)
+    monkeypatch.setattr(manager, "STATE_FILE", state_file)
+    monkeypatch.setattr(
+        "desktop_manager.scanner.scan",
+        lambda cfg, show_system=None: [
+            DiscoveredApp(id="file:app-1.2.3", name="App-1.2.3",
+                          exec_path=str(fresh))])
+    monkeypatch.setattr(sys, "argv", ["met", "--sync", "--all"])
+    main()
+
+    out = capsys.readouterr().out
+    assert "re-linked file:app-1.2.2 -> app-1.2.3.AppImage" in out
+    assert sorted(p.name for p in target.glob("*.desktop")) == ["app.desktop"]
+    import json
+    assert json.loads(state_file.read_text()) == {"file:app-1.2.3": "app.desktop"}
+
+
 def test_interactive_adopts_id_changed_selection(tmp_path, capsys, monkeypatch):
     """Harvest-incident replay: old state ID, new discovery ID, same binary."""
     from desktop_manager.__main__ import interactive

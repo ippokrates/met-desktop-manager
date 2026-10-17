@@ -77,6 +77,48 @@ def test_build_content_requires_fields():
         g.build_desktop_content("X", "")
 
 
+def test_build_content_routed_appimage():
+    """AppImage launchers call the router and record the real file."""
+    c = g.build_desktop_content(
+        "OpenChamber (Excluded)", "/home/u/Downloads/OpenChamber-1.2.2.AppImage",
+        route_cmd=["/usr/local/bin/desktop-manager"],
+        route_id="file:openchamber-1.2.2",
+        met_binary="/home/u/Downloads/OpenChamber-1.2.2.AppImage")
+    assert "Exec=/usr/local/bin/desktop-manager run file:openchamber-1.2.2" in c
+    assert "mullvad-exclude" not in c  # the router applies it at launch time
+    assert "X-Met-Binary=/home/u/Downloads/OpenChamber-1.2.2.AppImage" in c
+    assert "X-Managed-By=met-desktop-manager" in c
+
+
+def test_build_content_routed_quotes_router_path_with_spaces():
+    c = g.build_desktop_content(
+        "App", "/home/u/Downloads/app-1.0.AppImage",
+        route_cmd=["/opt/My Tools/desktop-manager"],
+        route_id="file:app-1.0",
+        met_binary="/home/u/Downloads/app-1.0.AppImage")
+    assert 'Exec="/opt/My Tools/desktop-manager" run file:app-1.0' in c
+
+
+def test_build_content_routed_needs_both_parts():
+    """Half-set routing falls back to today's direct Exec."""
+    c = g.build_desktop_content(
+        "App", "/home/u/Downloads/app-1.0.AppImage",
+        route_cmd=["/usr/bin/met"], route_id="", met_binary="/x/App.AppImage")
+    assert "Exec=mullvad-exclude /home/u/Downloads/app-1.0.AppImage" in c
+    assert "X-Met-Binary=/x/App.AppImage" in c
+
+
+def test_build_content_plain_stays_plain():
+    c = g.build_desktop_content("Zen Bin", "/home/user/Downloads/zen/zen-bin")
+    assert "X-Met-Binary" not in c
+    assert "Exec=mullvad-exclude /home/user/Downloads/zen/zen-bin" in c
+
+
+def test_routed_exec_helper():
+    assert g.routed_exec(["/usr/bin/met"], "file:a-1.0") == "/usr/bin/met run file:a-1.0"
+    assert g.routed_exec(["/opt/My Tools/met"], "file:a") == '"/opt/My Tools/met" run file:a'
+
+
 def test_unique_filename_never_overwrites(tmp_path):
     (tmp_path / "zen-bin.desktop").write_text("existing")
     assert g.unique_filename(tmp_path, "Zen Bin") == "zen-bin-2.desktop"

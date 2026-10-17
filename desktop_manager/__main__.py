@@ -147,7 +147,14 @@ def _toggle_rescan(cfg, cur_apps, cur_show):
 
 
 def main() -> None:
+    # `run` is dispatched before argparse: it is a hot path (every AppImage
+    # launch) and must forward arbitrary app args (%U, files) untouched.
+    if sys.argv[1:2] == ["run"]:
+        from . import router
+        sys.exit(router.run(sys.argv[2:]))
+
     from . import manager
+    from . import router
     from .scanner import group_by_directory, load_config, scan
 
     parser = build_parser()
@@ -183,6 +190,11 @@ def main() -> None:
         return
     if args.sync:
         cfg, _showing = _resolve_show_system(load_config(), override)
+        # Repair replaced AppImages first, so --all does not create a second
+        # launcher for an app the state still remembers under its old id.
+        for message in router.heal_all(manager.resolve_target_dir(),
+                                       manager.STATE_FILE):
+            print(message)
         apps = scan(cfg, show_system=override)
         if args.all:
             selected = {a.id: a for a in apps}
@@ -244,6 +256,7 @@ def interactive(target_dir=None, state_file=None, show_system=None) -> None:
     from pathlib import Path
 
     from . import manager
+    from . import router
     from . import updatecheck
     from .scanner import load_config, scan
 
@@ -255,6 +268,12 @@ def interactive(target_dir=None, state_file=None, show_system=None) -> None:
     if not apps:
         print("No apps discovered. Check apps.yaml paths.")
         return
+
+    # Repair AppImage launchers whose file an update replaced, so the picker
+    # shows them still ticked instead of broken-old + unticked-new.
+    for message in router.heal_all(target_dir, state_file):
+        print(message)
+
     state = manager.load_state(state_file)
 
     # Pre-tick by ID *or* by binary: an app selected under an old ID

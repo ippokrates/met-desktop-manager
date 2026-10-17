@@ -95,6 +95,16 @@ def _quote_word(word: str) -> str:
     return '"' + word.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+def routed_exec(route_cmd: list[str], route_id: str) -> str:
+    """Exec value asking the router to launch an app by id.
+
+    Example:
+      ["/usr/local/bin/desktop-manager"], "file:app-1.2.2" ->
+      "/usr/local/bin/desktop-manager run file:app-1.2.2"
+    """
+    return " ".join(quote_exec(part) for part in [*route_cmd, "run", route_id])
+
+
 def build_desktop_content(
     name: str,
     exec_path: str,
@@ -103,12 +113,20 @@ def build_desktop_content(
     categories: str = DEFAULT_CATEGORIES,
     terminal: bool = False,
     exclude: bool = True,
+    route_cmd: list[str] | None = None,
+    route_id: str = "",
+    met_binary: str = "",
 ) -> str:
     """Return full `[Desktop Entry]` text, including the managed marker.
 
     With exclude=True (default), the app is launched outside the VPN
     tunnel: `Exec` is prefixed with `mullvad-exclude` and `Name` gets an
     ` (Excluded)` suffix. Both are idempotent (no double prefix/suffix).
+
+    With route_cmd + route_id (self-updating AppImages), `Exec` calls the
+    router instead (`<met> run <app-id>`) and `X-Met-Binary` records the
+    real file. The router applies `mullvad-exclude` itself, so no prefix is
+    written here — the version in the path never reaches the Exec line.
     """
     if not (name or "").strip():
         raise ValueError("name must not be empty")
@@ -117,9 +135,12 @@ def build_desktop_content(
     clean_name = name.strip()
     if exclude and not clean_name.lower().endswith(EXCLUDED_SUFFIX.lower()):
         clean_name += EXCLUDED_SUFFIX
-    exec_value = quote_exec(exec_path)
-    if exclude and not exec_value.startswith(MULLVAD_PREFIX + " "):
-        exec_value = f"{MULLVAD_PREFIX} {exec_value}"
+    if route_cmd and route_id:
+        exec_value = routed_exec(route_cmd, route_id)
+    else:
+        exec_value = quote_exec(exec_path)
+        if exclude and not exec_value.startswith(MULLVAD_PREFIX + " "):
+            exec_value = f"{MULLVAD_PREFIX} {exec_value}"
     lines = [
         "[Desktop Entry]",
         "Version=1.0",
@@ -133,6 +154,8 @@ def build_desktop_content(
         lines.append(f"Comment={comment.strip()}")
     if categories.strip():
         lines.append(f"Categories={categories.strip()}")
+    if met_binary.strip():
+        lines.append(f"X-Met-Binary={met_binary.strip()}")
     lines.append(f"X-Managed-By={MANAGED_VALUE}")
     return "\n".join(lines) + "\n"
 

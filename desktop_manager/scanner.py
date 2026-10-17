@@ -224,6 +224,10 @@ def _is_appimage(p: Path | str) -> bool:
         return False
 
 
+# Public alias: manager/router reuse the same suffix rule.
+is_appimage_path = _is_appimage
+
+
 def exec_key(exec_path: str) -> str:
     """Stable cross-source identity for an executable.
 
