@@ -162,6 +162,7 @@ system_apps:  # system launchers hide by default; allowlist shows, blacklist hid
   blacklist: []
 flatpak: {enabled: true}
 snap: {enabled: true}
+appimage: {prefer_newest: true}  # newest AppImage wins, even while the old file exists
 excludes:    # substrings or globs, e.g. uninstall, "*.so*", crashpad
 target_dir: ~/.local/share/applications
 ```
@@ -216,6 +217,11 @@ one. Running `met` also does this work up front: it repairs a launcher whose
 file was already replaced, and converts a still-working AppImage launcher to
 this form so a future update cannot break it.
 
+The newest matching file is adopted even while the old one is still on disk,
+so a download you never cleaned up cannot leave the icon on an old version.
+Set `appimage.prefer_newest: false` in `apps.yaml` to repair only when the
+recorded file is gone.
+
 Plain binaries, flatpak and snap launchers keep their direct `Exec=`. They
 keep working even if this tool is uninstalled, and only AppImages depend on
 `met run`.
@@ -246,6 +252,12 @@ to start clean, or restore it from a backup.
 ### [needs chmod +x] tag on an AppImage
 met adds the exec bit itself on the next sync. Reported apps appear
 in the summary as `made executable`.
+
+### AppImage icon starts an old version
+A newer file sits next to the old one, and the launcher still names the old
+path. Run `met`, or just click the icon: the router adopts the newest match by
+modification time and re-points the launcher. To stay on an old build, put
+`appimage: {prefer_newest: false}` in `apps.yaml`.
 
 ### AppImage icon does nothing after an update
 The app replaced its own file (or was renamed). Run `met`: it re-links the

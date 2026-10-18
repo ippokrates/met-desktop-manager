@@ -301,10 +301,10 @@ def interactive(target_dir=None, state_file=None, show_system=None) -> None:
     print(f"Selected {len(selected)} app(s): {len(new)} new, "
           f"{len(doomed)} to remove."
           + (f" {len(vanished)} previously-managed no longer discovered"
-             f" (kept, see below)." if vanished else ""))
+             if vanished else ""))
     if vanished:
         _print_vanished(vanished,
-                        "No longer discovered, will be KEPT (not deleted):")
+                        "No longer found, will be deleted:")
     prune = False
     if sys.stdin.isatty():
         import questionary
@@ -313,7 +313,7 @@ def interactive(target_dir=None, state_file=None, show_system=None) -> None:
             print("Cancelled, nothing changed.")
             return
         if vanished and questionary.confirm(
-                "Also DELETE the broken/kept files above?", default=True,
+                "Also delete the broken files above?", default=True,
                 qmark=PROMPT_MARK).ask():
             prune = True
 

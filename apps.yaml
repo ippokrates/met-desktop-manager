@@ -52,3 +52,9 @@ excludes:
   - "*.iso"
 
 target_dir: ~/.local/share/applications
+
+# AppImage router: when an older and a newer version of the same app both
+# exist on disk, launch and re-point the launcher at the newer one.
+# false = repair-only: the launcher is fixed only when its file is gone.
+appimage:
+  prefer_newest: true

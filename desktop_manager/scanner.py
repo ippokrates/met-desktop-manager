@@ -42,6 +42,7 @@ DEFAULT_CONFIG = {
     "system_apps": {"hide": True, "allowlist": [], "blacklist": []},
     "flatpak": {"enabled": True},
     "snap": {"enabled": True},
+    "appimage": {"prefer_newest": True},
     "excludes": [
         "uninstall", "uninstaller", "install.sh",
         "chrome-sandbox", "crashpad", "fsnotifier", "abicheck",

@@ -38,6 +38,27 @@ def env(tmp_path):
     return target, state_file, download
 
 
+@pytest.fixture(autouse=True)
+def _isolated_config(monkeypatch):
+    """Never read the developer's real apps.yaml during tests."""
+    monkeypatch.setattr(router.scanner, "load_config", lambda *a, **k: {})
+
+
+def _set_prefer_newest(monkeypatch, value: bool) -> None:
+    monkeypatch.setattr(router.scanner, "load_config",
+                        lambda *a, **k: {"appimage": {"prefer_newest": value}})
+
+
+def _old_and_new(env):
+    """Recorded 1.1.1 (older mtime) plus 1.1.3 next to it, both on disk."""
+    target, state_file, dl = env
+    old = _appimage(dl / "app-1.1.1.AppImage", mtime=1_000_000)
+    new = _appimage(dl / "app-1.1.3.AppImage", mtime=2_000_000)
+    launcher = _launcher(target, "file:app-1.1.1", str(old))
+    manager.save_state({"file:app-1.1.1": "app.desktop"}, state_file)
+    return target, state_file, old, new, launcher
+
+
 # --- strip_version --------------------------------------------------------
 
 def test_strip_version_formats():
@@ -264,6 +285,122 @@ def test_launch_path_does_not_rewrite_working_launchers(env):
         "file:krita-5.3.4.1-x86_64", state, state_file, target)
     assert (got, status) == (str(binary), "ok")
     assert (target / "krita.desktop").read_text() == before
+
+
+# --- prefer newest (old file still on disk) -------------------------------
+
+def test_resolve_adopts_newer_while_old_exists(env):
+    """New download next to the old one must win, not wait for a deletion."""
+    target, state_file, old, new, launcher = _old_and_new(env)
+
+    got, eff_id, status = router.resolve(
+        "file:app-1.1.1", None, state_file, target)
+    assert (got, eff_id, status) == (str(new), "file:app-1.1.3", "updated")
+
+    text = launcher.read_text()
+    assert "run file:app-1.1.3" in text
+    assert f"X-Met-Binary={new}" in text
+    assert manager.load_state(state_file) == {"file:app-1.1.3": "app.desktop"}
+    assert old.is_file()                 # never deleted, only unpointed
+
+
+def test_resolve_keeps_old_when_recorded_is_newest(env):
+    """The recorded file being newest means no write at all."""
+    target, state_file, dl = env
+    newer = _appimage(dl / "app-1.1.3.AppImage", mtime=2_000_000)
+    _appimage(dl / "app-1.1.1.AppImage", mtime=1_000_000)
+    launcher = _launcher(target, "file:app-1.1.3", str(newer))
+    manager.save_state({"file:app-1.1.3": "app.desktop"}, state_file)
+    before = launcher.read_text()
+
+    got, _eff, status = router.resolve(
+        "file:app-1.1.3", None, state_file, target)
+    assert (got, status) == (str(newer), "ok")
+    assert launcher.read_text() == before
+    assert manager.load_state(state_file) == {"file:app-1.1.3": "app.desktop"}
+
+
+def test_resolve_equal_mtime_uses_natural_order(env):
+    """Same mtime: 1.1.3 beats 1.1.1, and 1.1.1 never ousts 1.1.3."""
+    target, state_file, dl = env
+    record = _appimage(dl / "app-1.1.3.AppImage", mtime=5_000_000)
+    _appimage(dl / "app-1.1.1.AppImage", mtime=5_000_000)
+    _launcher(target, "file:app-1.1.3", str(record))
+    manager.save_state({"file:app-1.1.3": "app.desktop"}, state_file)
+
+    got, _eff, status = router.resolve(
+        "file:app-1.1.3", None, state_file, target)
+    assert (got, status) == (str(record), "ok")
+
+
+def test_prefer_newest_false_keeps_old(env, monkeypatch):
+    """Repair-only mode: a newer file on disk changes nothing."""
+    _set_prefer_newest(monkeypatch, False)
+    target, state_file, old, _new, launcher = _old_and_new(env)
+    before = launcher.read_text()
+
+    got, _eff, status = router.resolve(
+        "file:app-1.1.1", None, state_file, target)
+    assert (got, status) == (str(old), "ok")
+    assert launcher.read_text() == before
+    assert manager.load_state(state_file) == {"file:app-1.1.1": "app.desktop"}
+
+
+def test_prefer_newest_false_still_routes(env, monkeypatch):
+    """Repair-only mode still converts a legacy direct Exec= launcher."""
+    _set_prefer_newest(monkeypatch, False)
+    target, state_file, old, _new, _launcher_path = _old_and_new(env)
+    (target / "app.desktop").write_text(
+        "[Desktop Entry]\nName=App (Excluded)\n"
+        f"Exec=mullvad-exclude {old}\nType=Application\n"
+        "X-Managed-By=met-desktop-manager\n")
+
+    got, _eff, status = router.resolve(
+        "file:app-1.1.1", None, state_file, target, convert=True)
+    assert (got, status) == (str(old), "routed")
+    text = (target / "app.desktop").read_text()
+    assert "run file:app-1.1.1" in text
+    assert f"X-Met-Binary={old}" in text
+
+
+def test_prefer_newest_defaults_to_true(monkeypatch):
+    monkeypatch.setattr(router.scanner, "load_config", lambda *a, **k: {})
+    assert router._prefer_newest() is True
+    _set_prefer_newest(monkeypatch, False)
+    assert router._prefer_newest() is False
+
+
+def test_heal_all_reports_a_switch(env):
+    """`met`/`--sync` adopt the newer file and say so."""
+    target, state_file, old, new, _launcher_path = _old_and_new(env)
+
+    messages = router.heal_all(target, state_file)
+    assert messages == [f"switched file:app-1.1.1 -> {new.name}"]
+    assert manager.load_state(state_file) == {"file:app-1.1.3": "app.desktop"}
+    assert router.heal_all(target, state_file) == []       # idempotent
+    assert old.is_file()
+
+
+def test_newest_match_is_case_insensitive(env):
+    """`krita-1.1` -> `Krita-1.2` must still heal."""
+    _, _, dl = env
+    old = _appimage(dl / "krita-1.1.AppImage", mtime=1_000_000)
+    fresh = _appimage(dl / "Krita-1.2.AppImage", mtime=2_000_000)
+    assert router.find_newest_appimage(old) == str(fresh)
+
+
+def test_resolve_heals_across_a_case_change(env):
+    target, state_file, dl = env
+    old = _appimage(dl / "krita-1.1.AppImage", mtime=1_000_000)
+    fresh = _appimage(dl / "Krita-1.2.AppImage", mtime=2_000_000)
+    launcher = _launcher(target, "file:krita-1.1", str(old))
+    manager.save_state({"file:krita-1.1": "app.desktop"}, state_file)
+
+    got, eff_id, status = router.resolve(
+        "file:krita-1.1", None, state_file, target)
+    assert (got, eff_id, status) == (str(fresh), "file:krita-1.2", "updated")
+    assert f"X-Met-Binary={fresh}" in launcher.read_text()
+    assert manager.load_state(state_file) == {"file:krita-1.2": "app.desktop"}
 
 
 # --- run ------------------------------------------------------------------

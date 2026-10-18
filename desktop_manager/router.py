@@ -15,7 +15,10 @@ with the app, outside the VPN tunnel.
 
 Newest wins by *modification time*, never by name: the updater wrote the new
 file last, while name ordering has no universal answer (`1.9.0` sorts after
-`1.10.2` as text; `2.2a` vs `2.2.1` is ambiguous).
+`1.10.2` as text; `2.2a` vs `2.2.1` is ambiguous). The newest match is adopted
+even while the old file still exists, so a download that is never cleaned up
+cannot leave the launcher on an old version. `appimage.prefer_newest: false`
+in apps.yaml restricts this to the repair case (recorded file gone).
 
 Only AppImages are routed. Plain binaries, flatpak and snap launchers keep
 their direct `Exec=`, so they still work if this tool is gone.
@@ -29,7 +32,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import generator
+from . import generator, scanner
 from .manager import STATE_FILE, _ensure_executable, _is_managed_file
 from .manager import load_state, managed_exec_key, resolve_target_dir, save_state
 from .scanner import is_appimage_path
@@ -82,23 +85,40 @@ def _mtime(path: Path) -> float:
         return 0.0
 
 
+def _sort_key(path: Path) -> tuple:
+    """Rank a candidate: newest mtime first, natural name order as tie-break."""
+    return (_mtime(path), _natural_key(path.name))
+
+
+def _prefer_newest() -> bool:
+    """Whether a newer AppImage beats a still-working recorded one.
+
+    `appimage.prefer_newest` in apps.yaml, default True. Read once per
+    resolve() call (launch and heal both go through it).
+    """
+    return bool(scanner.load_config().get("appimage", {})
+                .get("prefer_newest", True))
+
+
 def find_newest_appimage(old_path: Path | str) -> str:
     """Newest `.AppImage` next to `old_path` sharing its version-stripped name.
 
-    Returns "" when nothing matches. Non-AppImage leftovers (a `.part`
-    download) are ignored, and `old_path` itself is never returned.
+    Returns "" when nothing matches. Matching ignores case, so a release
+    renamed `krita-1.1` -> `Krita-1.2` still heals. Non-AppImage leftovers (a
+    `.part` download) are ignored, and `old_path` itself is never returned.
     """
     old = Path(old_path)
-    prefix = strip_version(old.stem)
+    prefix = strip_version(old.stem).lower()
     try:
         candidates = [e for e in old.parent.iterdir()
                       if e != old and e.is_file()
-                      and e.name.startswith(prefix) and is_appimage_path(e)]
+                      and e.name.lower().startswith(prefix)
+                      and is_appimage_path(e)]
     except OSError:
         return ""
     if not candidates:
         return ""
-    newest = max(candidates, key=lambda p: (_mtime(p), _natural_key(p.name)))
+    newest = max(candidates, key=_sort_key)
     return str(newest)
 
 
@@ -210,8 +230,11 @@ def resolve(app_id: str, state: dict | None = None, state_file=None,
 
     Returns (binary, effective app id, status) with status one of:
       "ok"      binary exists, nothing changed
+      "updated" the recorded file exists but a newer match was adopted;
+                launcher + state updated
       "routed"  a working AppImage launcher was rewritten to the routed form
-      "healed"  a newer AppImage was adopted; launcher + state updated
+      "healed"  the recorded AppImage is gone; a newer one was adopted and
+                launcher + state updated
       "missing" the app is gone (no matching AppImage found)
       "unknown" no managed launcher is tracked under this id
 
@@ -223,6 +246,7 @@ def resolve(app_id: str, state: dict | None = None, state_file=None,
     target_dir = Path(target_dir) if target_dir else resolve_target_dir()
     if state is None:
         state = load_state(state_file)
+    prefer_newest = _prefer_newest()
     eff_id, launcher = _launcher_for(app_id, state, target_dir)
     if launcher is None or not launcher.is_file():
         return "", eff_id, "unknown"
@@ -231,6 +255,13 @@ def resolve(app_id: str, state: dict | None = None, state_file=None,
         return "", eff_id, "unknown"
     binary = _recorded_binary(launcher)
     if binary and Path(binary).is_file():
+        if prefer_newest and is_appimage_path(binary):
+            newest = find_newest_appimage(binary)
+            if newest and _sort_key(Path(newest)) > _sort_key(Path(binary)):
+                new_id = f"file:{Path(newest).stem.lower()}"
+                _rewrite_launcher(launcher, eff_id, new_id, newest)
+                _heal_state(eff_id, new_id, state, state_file)
+                return newest, new_id, "updated"
         if convert and is_appimage_path(binary):
             if _rewrite_launcher(launcher, eff_id, eff_id, binary):
                 return binary, eff_id, "routed"
@@ -250,9 +281,10 @@ def heal_all(target_dir=None, state_file=None) -> list[str]:
     """Re-link replaced AppImage launchers and route the working ones.
 
     Run by the picker and by `--sync`, so a launcher broken by an update is
-    repaired even when the menu icon was never clicked since, and a working
-    AppImage launcher is made update-proof before it can break. Returns one
-    message per change.
+    repaired even when the menu icon was never clicked since, a working
+    AppImage launcher is made update-proof before it can break, and a newer
+    download left next to the old file is adopted. Returns one message per
+    change.
     """
     state_file = Path(state_file) if state_file else STATE_FILE
     target_dir = Path(target_dir) if target_dir else resolve_target_dir()
@@ -263,6 +295,8 @@ def heal_all(target_dir=None, state_file=None) -> list[str]:
                                          convert=True)
         if status == "healed":
             messages.append(f"re-linked {app_id} -> {Path(binary).name}")
+        elif status == "updated":
+            messages.append(f"switched {app_id} -> {Path(binary).name}")
         elif status == "routed":
             messages.append(f"routed {app_id} (survives its own updates)")
     return messages
