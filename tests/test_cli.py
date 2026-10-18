@@ -148,6 +148,24 @@ def test_preticked_ids_match_by_binary(tmp_path):
     assert _preticked_ids(apps, state, target) == {"desktop:fake"}
 
 
+def test_preticked_routed_launcher_by_x_met_binary(tmp_path):
+    """A routed AppImage stays ticked when discovery switches IDs."""
+    from desktop_manager import generator
+    from desktop_manager.__main__ import _preticked_ids
+
+    target = tmp_path / "apps"
+    target.mkdir()
+    appimage = tmp_path / "Foo-1.0.AppImage"
+    appimage.write_bytes(b"\x7fELF" + b"\x00" * 60)
+    (target / "old.desktop").write_text(generator.build_desktop_content(
+        "Foo", str(appimage), route_cmd=["/usr/bin/met"],
+        route_id="file:foo-1.0", met_binary=str(appimage)))
+    state = {"file:foo-1.0": "old.desktop"}
+    apps = [DiscoveredApp(id="desktop:foo-1.0", name="Foo",
+                          exec_path=str(appimage))]
+    assert _preticked_ids(apps, state, target) == {"desktop:foo-1.0"}
+
+
 def test_interactive_relinks_replaced_appimage(tmp_path, capsys, monkeypatch):
     """An update that replaced the AppImage is repaired at picker startup."""
     import json

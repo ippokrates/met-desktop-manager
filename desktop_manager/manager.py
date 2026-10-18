@@ -123,17 +123,28 @@ def _is_managed_file(path: Path) -> bool:
 
 
 def managed_exec_key(path: Path) -> str:
-    """exec_key of a managed file's Exec= line ('' when unreadable).
+    """Real program a managed launcher points at ('' when unreadable).
+
+    Routed AppImages keep the file in X-Met-Binary because their Exec is
+    `met run <id>`, which would otherwise look like the met binary itself.
+    Prefer that line; fall back to Exec for older, non-routed launchers.
 
     Example:
-      file holding `Exec=mullvad-exclude /opt/x/app` -> "/opt/x/app"
+      routed launcher with X-Met-Binary=/opt/App.AppImage -> "/opt/App.AppImage"
+      plain launcher with `Exec=mullvad-exclude /opt/x/app` -> "/opt/x/app"
     """
     try:
-        for line in Path(path).read_text(errors="ignore").splitlines():
-            if line.startswith("Exec="):
-                return exec_key(line[5:])
+        lines = Path(path).read_text(errors="ignore").splitlines()
     except OSError:
-        pass
+        return ""
+    for line in lines:
+        if line.startswith("X-Met-Binary="):
+            binary = line.split("=", 1)[1].strip()
+            if binary:
+                return exec_key(binary)
+    for line in lines:
+        if line.startswith("Exec="):
+            return exec_key(line[5:])
     return ""
 
 

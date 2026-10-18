@@ -195,6 +195,52 @@ def test_sync_adopts_id_changed_entry(dirs):
     assert json.loads(state.read_text()) == {"desktop:vesktop": "vesktop.desktop"}
 
 
+def _routed_app(dirs, tmp_path, app_id="file:foo-1.0"):
+    """Create a routed managed launcher for a fake AppImage."""
+    target, state = dirs
+    appimage = tmp_path / "Foo-1.0.AppImage"
+    appimage.write_bytes(b"\x7fELF" + b"\x00" * 60)
+    dest = manager.create_desktop(
+        _app(app_id, "Foo", str(appimage)), target, state)
+    return target, state, appimage, dest
+
+
+def test_managed_exec_key_prefers_x_met_binary(dirs, tmp_path):
+    """A routed launcher's identity is the AppImage, not the met command."""
+    target, state, appimage, dest = _routed_app(dirs, tmp_path)
+    text = dest.read_text()
+    assert " run file:foo-1.0" in text  # Exec really is routed
+    assert f"X-Met-Binary={appimage}" in text
+    assert manager.managed_exec_key(dest) == str(appimage.resolve())
+
+
+def test_sync_adopts_routed_launcher_under_new_id(dirs, tmp_path):
+    """Same AppImage discovered as desktop: instead of file: -> adopt, keep."""
+    target, state, appimage, dest = _routed_app(dirs, tmp_path)
+    new_app = {"id": "desktop:foo-1.0", "name": "Foo",
+               "exec_path": str(appimage)}
+    res = manager.sync({"desktop:foo-1.0": new_app}, target, state,
+                       discovered={"desktop:foo-1.0": new_app})
+    assert res["adopted"] == {"file:foo-1.0": "desktop:foo-1.0"}
+    assert res["removed"] == []
+    assert dest.exists()
+    text = dest.read_text()
+    assert " run desktop:foo-1.0" in text
+    assert f"X-Met-Binary={appimage}" in text
+    assert json.loads(state.read_text()) == {"desktop:foo-1.0": dest.name}
+
+
+def test_routed_launcher_not_orphaned_when_id_changed(dirs, tmp_path):
+    """The OpenChamber case: old ID, new discovery, same AppImage -> no delete."""
+    target, state, appimage, _ = _routed_app(dirs, tmp_path)
+    new_app = {"id": "desktop:foo-1.0", "name": "Foo",
+               "exec_path": str(appimage)}
+    orphans = manager.find_orphaned(
+        json.loads(state.read_text()), {"desktop:foo-1.0": new_app}, target,
+        discovered={"desktop:foo-1.0": new_app})
+    assert orphans == {}
+
+
 def test_find_orphaned_marks_vanished(dirs):
     target, state = dirs
     app = _app()
