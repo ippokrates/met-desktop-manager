@@ -61,18 +61,44 @@ Commands: `met` or `desktop-manager` (two names for the same program).
 ### Basic Usage
 
 ```bash
-# Interactive picker: filter, tick with Space, confirm
+# Startup menu: Pick apps, List, Options, Backup, Quit
 met
 
 # List every discovered app
 met --list
 ```
 
+In a terminal, `met` opens a small menu with **Pick apps** preselected, so
+Enter takes you straight to the picker. Pick apps and Quit return to the
+shell; List, Options and Backup return to the menu. Pipes and SSH skip the
+menu and use the numbered prompt.
+
 ## 🔧 Commands
 
 ### Core Commands
 
-#### `met` (interactive picker)
+#### `met` (startup menu)
+No arguments opens the menu, with Pick apps preselected:
+
+```
+met  12 app(s) managed  ·  system apps hidden
+❯ Pick apps
+  List discovered
+  Options
+  Backup / restore
+  Quit
+```
+
+- **Pick apps**: the checkbox picker described below. Returns to the shell.
+- **List discovered**: same output as `--list`, then back to the menu.
+- **Options**: settings summary. Read-only, plus "Open in editor" for
+  `apps.yaml` (`$VISUAL`, then `$EDITOR`, then `nano`).
+- **Backup / restore**: export or import a JSON backup.
+- **Quit**: leave without changes.
+
+Pipes and SSH skip the menu and use the numbered prompt.
+
+#### `met` (picker)
 Checkbox picker. Filter rounds accumulate picks, first row toggles system apps.
 
 ```bash

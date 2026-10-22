@@ -95,6 +95,14 @@ class DiscoveredApp:
     needs_chmod: bool = False  # .AppImage found without the exec bit
 
 
+def _first_config_file() -> Path | None:
+    """First existing, non-empty config file in lookup order, or None."""
+    for candidate in (_user_config_file(), CONFIG_FILE):
+        if candidate.is_file() and _read_config_file(candidate):
+            return candidate
+    return None
+
+
 def load_config(path: str | Path | None = None) -> dict:
     """Load config, first found wins (never crashes, never writes).
 
@@ -104,12 +112,13 @@ def load_config(path: str | Path | None = None) -> dict:
     """
     if path is not None:
         return _read_config_file(Path(path).expanduser())
-    for candidate in (_user_config_file(), CONFIG_FILE):
-        if candidate.is_file():
-            cfg = _read_config_file(candidate)
-            if cfg:
-                return cfg
-    return dict(DEFAULT_CONFIG)
+    found = _first_config_file()
+    return _read_config_file(found) if found else dict(DEFAULT_CONFIG)
+
+
+def config_source() -> Path | None:
+    """Return the file load_config() reads, or None when using defaults."""
+    return _first_config_file()
 
 
 def _read_config_file(p: Path) -> dict:

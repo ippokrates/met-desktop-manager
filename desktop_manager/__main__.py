@@ -2,6 +2,8 @@
 import argparse
 import json
 import os
+import shlex
+import subprocess
 import sys
 
 from rich.console import Console
@@ -146,7 +148,213 @@ def _toggle_rescan(cfg, cur_apps, cur_show):
     return new_apps, not cur_show
 
 
-def main() -> None:
+def _pause(msg: str = "Press Enter to return to the menu") -> None:
+    """Wait for Enter so output can be read before the menu redraws."""
+    try:
+        input(f"{msg} ...")
+    except (EOFError, KeyboardInterrupt):
+        pass
+
+
+def _cmd_list(override: bool | None) -> int:
+    """Print discovered apps (body of the --list branch)."""
+    from .scanner import group_by_directory, load_config, scan
+
+    cfg, _showing = _resolve_show_system(load_config(), override)
+    apps = scan(cfg, show_system=override)
+    if not apps:
+        print("No apps discovered. Check apps.yaml paths.")
+        return 0
+    console = Console()
+    for group_key, g_apps in group_by_directory(apps).items():
+        _print_group_header(group_key, len(g_apps), console)
+        for app in g_apps:
+            icon = f" [{app.icon_hint}]" if app.icon_hint else ""
+            print(f"    - {app.name}{_chmod_tag(app)} | "
+                  f"{app.exec_path}{icon} ({app.source})")
+    print(f"\n{len(apps)} app(s) discovered.")
+    return 0
+
+
+def _cmd_export(path: str) -> int:
+    """Write a JSON backup (body of the --export branch)."""
+    from pathlib import Path
+
+    from . import manager
+
+    data = manager.export_managed()
+    dest = Path(path).expanduser()
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    try:
+        dest.write_text(json.dumps(data, indent=2, sort_keys=False) + "\n")
+    except OSError as e:
+        print(f"Cannot write {dest}: {e}")
+        return 1
+    print(f"Exported {len(data['entries'])} app(s) to {dest}")
+    return 0
+
+
+def _cmd_import(path: str) -> int:
+    """Restore a JSON backup (body of the --import branch).
+
+    Errors print and return 1 instead of parser.error(), which would raise
+    SystemExit and close the menu.
+    """
+    from pathlib import Path
+
+    from . import manager
+
+    src = Path(path).expanduser()
+    try:
+        data = json.loads(src.read_text())
+    except OSError as e:
+        print(f"Cannot read {src}: {e}")
+        return 1
+    except ValueError as e:
+        print(f"Invalid JSON in {src}: {e}")
+        return 1
+    try:
+        result = manager.import_managed(data)
+    except ValueError as e:
+        print(str(e))
+        return 1
+    wrote, skipped = result["wrote"], result["skipped"]
+    print(f"Imported {len(wrote)} app(s), skipped {len(skipped)}.")
+    for f in wrote:
+        ok, msg = manager.validate_desktop_file(
+            manager.resolve_target_dir() / f)
+        print(f"  {f}: {'valid' if ok else 'INVALID: ' + msg}")
+    for s in skipped:
+        print(f"  skipped {s.get('app_id') or '?'} "
+              f"({s.get('filename') or '?'}): {s.get('reason')}")
+    return 0
+
+
+def _cmd_options() -> int:
+    """Read-only settings screen. Never writes the config."""
+    import questionary
+    from rich.table import Table
+
+    from . import manager
+    from .scanner import config_source, load_config
+
+    cfg = load_config()
+    source = config_source()
+
+    def enabled(section, default=True):
+        """Read `enabled` from {enabled: bool} or a bare bool."""
+        if isinstance(section, dict):
+            return bool(section.get("enabled", default))
+        return bool(section) if section is not None else default
+
+    sys_cfg = cfg.get("system_apps")
+    sys_cfg = sys_cfg if isinstance(sys_cfg, dict) else {}
+    appimage_cfg = cfg.get("appimage")
+    appimage_cfg = appimage_cfg if isinstance(appimage_cfg, dict) else {}
+
+    table = Table(title="Configuration", show_header=False)
+    table.add_column("setting", style="bold")
+    table.add_column("value")
+    table.add_row("file", str(source) if source else "built-in defaults")
+    table.add_row("target dir", str(manager.resolve_target_dir()))
+    table.add_row("path dirs",
+                  ", ".join(cfg.get("path_dirs", []) or []) or "-")
+    table.add_row("extra dirs",
+                  ", ".join(cfg.get("extra_dirs", []) or []) or "-")
+    table.add_row("system apps",
+                  "hidden" if sys_cfg.get("hide", True) else "shown")
+    table.add_row("flatpak", "on" if enabled(cfg.get("flatpak")) else "off")
+    table.add_row("snap", "on" if enabled(cfg.get("snap")) else "off")
+    table.add_row("desktop files",
+                  "on" if enabled(cfg.get("desktop_files")) else "off")
+    table.add_row("appimages",
+                  "adopt newest" if appimage_cfg.get("prefer_newest", True)
+                  else "repair only")
+    table.add_row("excludes",
+                  f"{len(cfg.get('excludes', []) or [])} patterns")
+    Console().print(table)
+
+    choice = questionary.select(
+        "Options",
+        choices=["Open in editor", "Back"],
+        qmark=PROMPT_MARK,
+    ).ask()
+    if choice != "Open in editor":
+        return 0
+    if source is None:
+        print("No config file found, built-in defaults are in use.")
+        return 0
+    editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "nano"
+    try:
+        subprocess.run([*shlex.split(editor), str(source)])
+    except (FileNotFoundError, OSError) as e:
+        print(f"Could not start editor: {e}")
+    return 0
+
+
+def _cmd_backup_menu() -> None:
+    """Export / Import submenu; returns to the main menu afterwards."""
+    import questionary
+
+    choice = questionary.select(
+        "Backup / restore",
+        choices=["Export backup", "Import backup", "Back"],
+        qmark=PROMPT_MARK,
+    ).ask()
+    if choice == "Export backup":
+        path = questionary.path("Save backup to:",
+                                default="met-backup.json").ask()
+        if path:
+            _cmd_export(path)
+            _pause()
+    elif choice == "Import backup":
+        path = questionary.path("Read backup from:").ask()
+        if path:
+            _cmd_import(path)
+            _pause()
+
+
+def _menu(override: bool | None) -> int:
+    """Startup screen. Picking apps or quitting ends the session."""
+    import questionary
+
+    from . import manager
+    from .scanner import load_config
+
+    while True:
+        cfg = load_config()
+        target_dir = manager.resolve_target_dir()
+        count = len(manager.managed_files(target_dir))
+        sys_cfg = cfg.get("system_apps")
+        hide = sys_cfg.get("hide", True) if isinstance(sys_cfg, dict) else True
+        header = (f"met   {count} app(s) managed  ·  "
+                  f"system apps {'hidden' if hide else 'shown'}")
+
+        choice = questionary.select(
+            header,
+            choices=["Pick apps", "List discovered", "Options",
+                     "Backup / restore", "Quit"],
+            qmark=PROMPT_MARK,
+        ).ask()
+
+        if choice in (None, "Quit"):
+            return 0
+        if choice == "Pick apps":
+            interactive(show_system=override)
+            return 0
+        if choice == "List discovered":
+            _cmd_list(override)
+            _pause()
+        elif choice == "Options":
+            _cmd_options()
+        elif choice == "Backup / restore":
+            _cmd_backup_menu()
+
+
+def main() -> int | None:
     # `run` is dispatched before argparse: it is a hot path (every AppImage
     # launch) and must forward arbitrary app args (%U, files) untouched.
     if sys.argv[1:2] == ["run"]:
@@ -155,7 +363,7 @@ def main() -> None:
 
     from . import manager
     from . import router
-    from .scanner import group_by_directory, load_config, scan
+    from .scanner import load_config, scan
 
     parser = build_parser()
     args = parser.parse_args()
@@ -165,20 +373,7 @@ def main() -> None:
         updatecheck.manual_check()
         return
     if args.list:
-        cfg, showing = _resolve_show_system(load_config(), override)
-        apps = scan(cfg, show_system=override)
-        if not apps:
-            print("No apps discovered. Check apps.yaml paths.")
-            return
-        console = Console()
-        for group_key, g_apps in group_by_directory(apps).items():
-            _print_group_header(group_key, len(g_apps), console)
-            for app in g_apps:
-                icon = f" [{app.icon_hint}]" if app.icon_hint else ""
-                print(f"    - {app.name}{_chmod_tag(app)} | "
-                      f"{app.exec_path}{icon} ({app.source})")
-        print(f"\n{len(apps)} app(s) discovered.")
-        return
+        return _cmd_list(override)
     if args.create:
         if not args.exec_path:
             parser.error("--create NAME requires --exec PATH")
@@ -210,39 +405,11 @@ def main() -> None:
             sys.exit(1)
         return
     if args.export:
-        from pathlib import Path
-        data = manager.export_managed()
-        dest = Path(args.export).expanduser()
-        try:
-            dest.parent.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            pass
-        dest.write_text(json.dumps(data, indent=2, sort_keys=False) + "\n")
-        print(f"Exported {len(data['entries'])} app(s) to {dest}")
-        return
+        return _cmd_export(args.export)
     if args.import_file:
-        from pathlib import Path
-        src = Path(args.import_file).expanduser()
-        try:
-            data = json.loads(src.read_text())
-        except OSError as e:
-            parser.error(f"cannot read {src}: {e}")
-        except ValueError as e:
-            parser.error(f"invalid JSON in {src}: {e}")
-        try:
-            result = manager.import_managed(data)
-        except ValueError as e:
-            parser.error(str(e))
-        wrote, skipped = result["wrote"], result["skipped"]
-        print(f"Imported {len(wrote)} app(s), skipped {len(skipped)}.")
-        for f in wrote:
-            ok, msg = manager.validate_desktop_file(
-                manager.resolve_target_dir() / f)
-            print(f"  {f}: {'valid' if ok else 'INVALID: ' + msg}")
-        for s in skipped:
-            print(f"  skipped {s.get('app_id') or '?'} "
-                  f"({s.get('filename') or '?'}): {s.get('reason')}")
-        return
+        return _cmd_import(args.import_file)
+    if sys.stdin.isatty():
+        return _menu(override)
     interactive(show_system=override)
 
 
@@ -540,4 +707,4 @@ def _print_summary(result: dict, manager, target_dir) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
