@@ -5,6 +5,7 @@
   <p><strong>Pick apps in a terminal checklist, get working launchers in your app menu.</strong></p>
   
   <p>
+    <img src="https://github.com/ippokrates/met-desktop-manager/actions/workflows/ci.yml/badge.svg" alt="tests"/>
     <img src="https://img.shields.io/github/license/ippokrates/met-desktop-manager" alt="license"/>
     <img src="https://img.shields.io/badge/platform-Linux-lightgrey" alt="platform"/>
     <img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="python"/>
