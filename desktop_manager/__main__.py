@@ -5,6 +5,7 @@ import os
 import shlex
 import subprocess
 import sys
+from datetime import datetime
 
 from rich.console import Console
 
@@ -295,6 +296,11 @@ def _cmd_options() -> int:
     return 0
 
 
+def _backup_name() -> str:
+    """Default export name with a unique timestamp."""
+    return datetime.now().strftime("met-backup-%Y-%m-%d-%H%M%S.json")
+
+
 def _cmd_backup_menu() -> None:
     """Export / Import submenu; returns to the main menu afterwards."""
     import questionary
@@ -306,7 +312,7 @@ def _cmd_backup_menu() -> None:
     ).ask()
     if choice == "Export backup":
         path = questionary.path("Save backup to:",
-                                default="met-backup.json").ask()
+                                default=_backup_name()).ask()
         if path:
             _cmd_export(path)
             _pause()
