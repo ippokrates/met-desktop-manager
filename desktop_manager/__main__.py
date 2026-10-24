@@ -367,6 +367,12 @@ def main() -> int | None:
         from . import router
         sys.exit(router.run(sys.argv[2:]))
 
+    # Bare-word subcommands are dispatched before argparse, which would
+    # reject an unknown positional argument.
+    if sys.argv[1:2] == ["update"]:
+        from . import updatecheck
+        return updatecheck.run_update()
+
     from . import manager
     from . import router
     from .scanner import load_config, scan

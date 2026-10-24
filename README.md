@@ -35,8 +35,8 @@ curl -fsSL https://raw.githubusercontent.com/ippokrates/met-desktop-manager/main
 ```
 
 Downloads the install script straight from the repo and runs it. It needs
-Python 3.12+ and pipx, installs `met` / `desktop-manager` via pipx, and
-doubles as the updater: run it again any time to pick up new commits.
+Python 3.12+ and pipx and installs `met` / `desktop-manager` via pipx.
+After that, update with `met update`.
 
 #### From the repo
 ```bash
@@ -172,6 +172,16 @@ met --check-updates
 Interactive sessions also auto-check quietly after finishing and print a
 one-line hint when a newer version exists. `--sync --all` and `--list`
 never fetch anything.
+
+#### `met update`
+Reinstall from the source this copy came from (GitHub main) through pipx.
+
+```bash
+met update
+```
+
+Prints `Already up to date` when there is nothing newer. It refuses to touch
+a copy installed from a local folder, so a dev checkout is never replaced.
 
 ## ⚙️ Configuration (`apps.yaml`)
 
