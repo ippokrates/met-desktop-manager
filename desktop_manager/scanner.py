@@ -836,30 +836,3 @@ def group_by_directory(apps: list[DiscoveredApp]) -> dict[str, list[DiscoveredAp
     ordered = sorted(groups.items(),
                      key=lambda kv: (group_base_name(kv[0]).lower(), kv[0].lower()))
     return dict(ordered)
-
-
-def load_existing_execs(dirs: list[str | Path] | None = None) -> set[str]:
-    """Parse Exec= lines from existing .desktop files (for future filtering)."""
-    if dirs is None:
-        dirs = [
-            Path.home() / ".local" / "share" / "applications",
-            Path("/usr/share/applications"),
-        ]
-    execs: set[str] = set()
-    for d in dirs:
-        p = Path(d).expanduser()
-        if not p.is_dir():
-            continue
-        try:
-            files = list(p.glob("*.desktop"))
-        except OSError:
-            continue
-        for f in files:
-            try:
-                for line in f.read_text(errors="ignore").splitlines():
-                    if line.startswith("Exec="):
-                        execs.add(line[5:].strip().strip('"').split()[0])
-                        break
-            except OSError:
-                continue
-    return execs
