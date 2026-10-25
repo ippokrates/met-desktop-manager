@@ -23,6 +23,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from .generator import MANAGED_MARKER
+
 CONFIG_FILE = Path(__file__).resolve().parent.parent / "apps.yaml"
 
 
@@ -564,7 +566,7 @@ def _parse_desktop_file(path: Path) -> dict:
         text = path.read_text(errors="ignore")
     except OSError:
         return fields
-    if "X-Managed-By=met-desktop-manager" in text:
+    if MANAGED_MARKER in text:
         fields["managed"] = "yes"  # ours: never harvest our own output
         return fields
     for line in text.splitlines():

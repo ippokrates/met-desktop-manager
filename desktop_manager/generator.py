@@ -9,8 +9,8 @@ import os
 import re
 from pathlib import Path
 
-MANAGED_MARKER = "X-Managed-By=met-desktop-manager"
 MANAGED_VALUE = "met-desktop-manager"
+MANAGED_MARKER = f"X-Managed-By={MANAGED_VALUE}"
 
 # All apps managed by this tool are launched outside the Mullvad VPN tunnel.
 MULLVAD_PREFIX = "mullvad-exclude"
@@ -156,7 +156,7 @@ def build_desktop_content(
         lines.append(f"Categories={categories.strip()}")
     if met_binary.strip():
         lines.append(f"X-Met-Binary={met_binary.strip()}")
-    lines.append(f"X-Managed-By={MANAGED_VALUE}")
+    lines.append(MANAGED_MARKER)
     return "\n".join(lines) + "\n"
 
 
@@ -179,4 +179,4 @@ def unique_filename(target_dir: Path, base: str) -> str:
 
 def is_managed_content(text: str) -> bool:
     """True if .desktop text carries our managed marker."""
-    return f"X-Managed-By={MANAGED_VALUE}" in text
+    return MANAGED_MARKER in text
