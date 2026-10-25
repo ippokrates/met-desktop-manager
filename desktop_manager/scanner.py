@@ -221,6 +221,7 @@ def _looks_executable(p: Path) -> bool:
 
 def _has_skip_ext(p: Path) -> bool:
     """True if the file (or any of its suffixes, e.g. .so.1) is a non-app type."""
+  # suffixes is [] for names like "..so", where suffix still says ".so".
     suffixes = [s.lower() for s in p.suffixes] or [p.suffix.lower()]
     return any(s in SKIP_EXTS or s.startswith(".so") for s in suffixes)
 
