@@ -20,8 +20,6 @@ from . import generator
 from .scanner import binary_exists, exec_key, is_appimage_path, load_config
 
 DEFAULT_TARGET_DIR = Path.home() / ".local" / "share" / "applications"
-# Kept as an alias so older callers/tests importing TARGET_DIR still work.
-TARGET_DIR = DEFAULT_TARGET_DIR
 LEGACY_STATE_FILE = Path(__file__).resolve().parent.parent / "state.json"
 
 
