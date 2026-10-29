@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from datetime import datetime
@@ -361,14 +362,16 @@ def _menu(override: bool | None) -> int:
 
 
 def main() -> int | None:
+    if shutil.which("mullvad-exclude") is None:
+        print("warning: mullvad-exclude not found; managed apps will not launch",
+              file=sys.stderr)
+
     # `run` is dispatched before argparse: it is a hot path (every AppImage
     # launch) and must forward arbitrary app args (%U, files) untouched.
     if sys.argv[1:2] == ["run"]:
         from . import router
         sys.exit(router.run(sys.argv[2:]))
 
-    # Bare-word subcommands are dispatched before argparse, which would
-    # reject an unknown positional argument.
     if sys.argv[1:2] == ["update"]:
         from . import updatecheck
         return updatecheck.run_update()
