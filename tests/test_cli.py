@@ -457,3 +457,29 @@ def test_toggle_rescan_without_cfg_is_none(monkeypatch):
     """_try_rescan rejects a None config; the helper must propagate that."""
     from desktop_manager.__main__ import _toggle_rescan
     assert _toggle_rescan(None, ["a"], False) is None
+
+
+def test_main_warns_when_mullvad_exclude_missing(
+        tmp_path, capsys, monkeypatch):
+    import desktop_manager.__main__ as m
+
+    missing = tmp_path / "missing.json"
+    monkeypatch.setattr(m.shutil, "which", lambda name: None)
+    # --import of a missing file exits fast (return 1), no scan, no writes.
+    monkeypatch.setattr(sys, "argv", ["met", "--import", str(missing)])
+
+    assert m.main() == 1
+    assert "mullvad-exclude not found" in capsys.readouterr().err
+
+
+def test_main_silent_when_mullvad_exclude_present(
+        tmp_path, capsys, monkeypatch):
+    import desktop_manager.__main__ as m
+
+    missing = tmp_path / "missing.json"
+    monkeypatch.setattr(m.shutil, "which",
+                        lambda name: "/usr/bin/mullvad-exclude")
+    monkeypatch.setattr(sys, "argv", ["met", "--import", str(missing)])
+
+    m.main()
+    assert "mullvad-exclude" not in capsys.readouterr().err
