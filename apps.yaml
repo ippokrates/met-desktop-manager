@@ -58,3 +58,7 @@ target_dir: ~/.local/share/applications
 # false = repair-only: the launcher is fixed only when its file is gone.
 appimage:
   prefer_newest: true
+
+# Use the bundled icon (desktop_manager/data/met.png) for every launcher
+# met generates. false = keep each app's own detected icon.
+custom_icon: true

@@ -1,7 +1,7 @@
 # 🛠️ met - Desktop Launcher Manager
 
 <div align="center">
-  
+  <img src="assets/met.png" alt="met - Desktop Launcher Manager" width="420">
   <p><strong>Pick apps in a terminal checklist, get working launchers in your app menu.</strong></p>
   
   <p>
@@ -200,11 +200,29 @@ system_apps:  # system launchers hide by default; allowlist shows, blacklist hid
 flatpak: {enabled: true}
 snap: {enabled: true}
 appimage: {prefer_newest: true}  # newest AppImage wins, even while the old file exists
+custom_icon: true  # bundled met icon for every generated launcher
 excludes:    # substrings or globs, e.g. uninstall, "*.so*", crashpad
 target_dir: ~/.local/share/applications
 ```
 
 `/usr/bin` stays excluded on purpose (2,400+ CLI tools would flood the picker).
+
+### Custom launcher icon
+
+Every `.desktop` file met generates uses the bundled icon at
+`desktop_manager/data/met.png`. Turn it off in `apps.yaml`:
+
+```yaml
+custom_icon: false
+```
+
+Then run `met` or `met --sync --all` to rewrite existing launchers and
+restore each app's own detected icon. `met --create ... --icon X` still
+uses `X`.
+
+A normal `met` run also refreshes the `Icon=` line of managed launchers it
+keeps but cannot discover, such as `--create` entries. Turning the bundled
+icon off leaves those kept files as they are.
 
 ### Location overrides (environment)
 

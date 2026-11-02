@@ -171,12 +171,29 @@ def test_sync_fixes_appimage_exec_bit(dirs, tmp_path):
     assert (target / "cool.desktop").exists()
 
 
-def test_sync_vanished_pruned_on_request(dirs):
+def test_sync_vanished_pruned_on_request(dirs, tmp_path):
+    import stat
+    real = tmp_path / "gonebin"
+    real.write_bytes(b"\x7fELF" + b"\x00" * 60)
+    real.chmod(real.stat().st_mode | stat.S_IXUSR)
     target, state = dirs
-    manager.create_desktop(_app(), target, state)
+    manager.create_desktop(_app("file:gone", "Gone", str(real), ""),
+                           target, state)
+    real.unlink()  # program is really gone
     res = manager.sync({}, target, state, discovered={}, prune_vanished=True)
-    assert res["removed"] == ["vesktop.desktop"]
-    assert not (target / "vesktop.desktop").exists()
+    assert res["removed"] == ["gone.desktop"]
+    assert not (target / "gone.desktop").exists()
+
+
+def test_sync_prune_keeps_existing_binary(dirs):
+    """A manual launcher for an app the scanner cannot see must survive
+    prune: the file it points at still exists."""
+    target, state = dirs
+    manager.create_desktop(_app("file:ls", "Ls", "/bin/ls", ""), target, state)
+    res = manager.sync({}, target, state, discovered={}, prune_vanished=True)
+    assert res["removed"] == []
+    assert (target / "ls.desktop").exists()
+    assert res["vanished"][0]["binary_exists"] is True
 
 
 def test_sync_adopts_id_changed_entry(dirs):
@@ -409,3 +426,129 @@ def test_save_state_replaces_existing_completely(dirs):
     manager.save_state({"new": "new.desktop"}, state)
     assert json.loads(state.read_text()) == {"new": "new.desktop"}
     assert "old" not in state.read_text()
+
+
+# --- bundled launcher icon ------------------------------------------------
+
+
+def _fake_icon(tmp_path):
+    icon = tmp_path / "met.png"
+    icon.write_bytes(b"\x89PNG\r\n\x1a\n")
+    return icon
+
+
+def test_custom_icon_used_when_enabled(dirs, tmp_path, monkeypatch):
+    target, state = dirs
+    icon = _fake_icon(tmp_path)
+    monkeypatch.setattr(manager, "CUSTOM_ICON_FILE", icon)
+    monkeypatch.setattr(manager, "load_config", lambda: {"custom_icon": True})
+    app = {"id": "file:x", "name": "X", "exec_path": "/bin/ls",
+           "icon_hint": "detected"}
+    dest = manager.create_desktop(app, target, state)
+    assert f"Icon={icon}" in dest.read_text()
+
+
+def test_custom_icon_disabled_keeps_detected(dirs, tmp_path, monkeypatch):
+    target, state = dirs
+    icon = _fake_icon(tmp_path)
+    monkeypatch.setattr(manager, "CUSTOM_ICON_FILE", icon)
+    monkeypatch.setattr(manager, "load_config", lambda: {"custom_icon": False})
+    app = {"id": "file:x", "name": "X", "exec_path": "/bin/ls",
+           "icon_hint": "detected"}
+    dest = manager.create_desktop(app, target, state)
+    assert "Icon=detected" in dest.read_text()
+
+
+def test_custom_icon_missing_falls_back(dirs, tmp_path, monkeypatch):
+    target, state = dirs
+    monkeypatch.setattr(manager, "CUSTOM_ICON_FILE", tmp_path / "missing.png")
+    monkeypatch.setattr(manager, "load_config", lambda: {"custom_icon": True})
+    app = {"id": "file:x", "name": "X", "exec_path": "/bin/ls",
+           "icon_hint": "detected"}
+    dest = manager.create_desktop(app, target, state)
+    assert "Icon=detected" in dest.read_text()
+
+
+def test_explicit_icon_beats_custom(dirs, tmp_path, monkeypatch):
+    target, state = dirs
+    icon = _fake_icon(tmp_path)
+    monkeypatch.setattr(manager, "CUSTOM_ICON_FILE", icon)
+    monkeypatch.setattr(manager, "load_config", lambda: {"custom_icon": True})
+    app = {"id": "file:x", "name": "X", "exec_path": "/bin/ls",
+           "icon": "explicit"}
+    dest = manager.create_desktop(app, target, state)
+    assert "Icon=explicit" in dest.read_text()
+
+
+def test_sync_uses_custom_icon(dirs, tmp_path, monkeypatch):
+    target, state = dirs
+    icon = _fake_icon(tmp_path)
+    monkeypatch.setattr(manager, "CUSTOM_ICON_FILE", icon)
+    monkeypatch.setattr(manager, "load_config", lambda: {"custom_icon": True})
+    app = {"id": "file:x", "name": "X", "exec_path": "/bin/ls",
+           "icon_hint": "detected"}
+    res = manager.sync({"file:x": app}, target, state)
+    assert res["created"] == ["x.desktop"]
+    assert f"Icon={icon}" in (target / "x.desktop").read_text()
+
+
+def test_sync_refreshes_icon_of_kept_launcher(dirs, tmp_path, monkeypatch):
+    target, state = dirs
+    icon = _fake_icon(tmp_path)
+    monkeypatch.setattr(manager, "CUSTOM_ICON_FILE", icon)
+    monkeypatch.setattr(manager, "load_config", lambda: {"custom_icon": True})
+    app = {"id": "manual:ls", "name": "Ls", "exec_path": "/bin/ls",
+           "icon": "old-icon"}
+    manager.create_desktop(app, target, state)
+    assert "Icon=old-icon" in (target / "ls.desktop").read_text()
+
+    res = manager.sync({}, target, state, discovered={})
+
+    assert f"Icon={icon}" in (target / "ls.desktop").read_text()
+    assert "ls.desktop" in res["created"]
+    assert res["removed"] == []
+
+
+def test_sync_keeps_old_icon_when_custom_disabled(dirs, tmp_path, monkeypatch):
+    target, state = dirs
+    icon = _fake_icon(tmp_path)
+    monkeypatch.setattr(manager, "CUSTOM_ICON_FILE", icon)
+    monkeypatch.setattr(manager, "load_config", lambda: {"custom_icon": False})
+    app = {"id": "manual:ls", "name": "Ls", "exec_path": "/bin/ls",
+           "icon": "old-icon"}
+    manager.create_desktop(app, target, state)
+
+    manager.sync({}, target, state, discovered={})
+
+    assert "Icon=old-icon" in (target / "ls.desktop").read_text()
+
+
+def test_sync_refreshes_icon_of_stray_managed_file(dirs, tmp_path, monkeypatch):
+    target, state = dirs
+    icon = _fake_icon(tmp_path)
+    monkeypatch.setattr(manager, "CUSTOM_ICON_FILE", icon)
+    monkeypatch.setattr(manager, "load_config", lambda: {"custom_icon": True})
+    stray = target / "stray.desktop"
+    stray.write_text(
+        "[Desktop Entry]\nName=Stray\n"
+        "Exec=mullvad-exclude /bin/ls\n"
+        "Icon=old-icon\nType=Application\n"
+        "X-Managed-By=met-desktop-manager\n")
+
+    manager.sync({}, target, state, discovered={})
+
+    assert f"Icon={icon}" in stray.read_text()
+
+
+def test_refresh_icon_inserts_missing_line(tmp_path):
+    path = tmp_path / "x.desktop"
+    path.write_text("[Desktop Entry]\nName=X\n"
+                    "X-Managed-By=met-desktop-manager\n")
+
+    assert manager.refresh_icon(path, "/new.png") is True
+
+    lines = path.read_text().splitlines()
+    assert "Icon=/new.png" in lines
+    assert lines.index("Icon=/new.png") < lines.index(
+        "X-Managed-By=met-desktop-manager")
+    assert manager.refresh_icon(path, "/new.png") is False

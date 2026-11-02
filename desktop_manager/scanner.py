@@ -45,6 +45,7 @@ DEFAULT_CONFIG = {
     "flatpak": {"enabled": True},
     "snap": {"enabled": True},
     "appimage": {"prefer_newest": True},
+    "custom_icon": True,
     "excludes": [
         "uninstall", "uninstaller", "install.sh",
         "chrome-sandbox", "crashpad", "fsnotifier", "abicheck",

@@ -21,6 +21,7 @@ from .scanner import binary_exists, exec_key, is_appimage_path, load_config
 
 DEFAULT_TARGET_DIR = Path.home() / ".local" / "share" / "applications"
 LEGACY_STATE_FILE = Path(__file__).resolve().parent.parent / "state.json"
+CUSTOM_ICON_FILE = Path(__file__).resolve().parent / "data" / "met.png"
 
 
 def resolve_target_dir(target_dir: Path | str | None = None) -> Path:
@@ -247,6 +248,49 @@ def _app_fields(app) -> tuple[str, str, str]:
     )
 
 
+def _explicit_icon(app) -> str:
+    """Icon explicitly supplied by the caller (`--icon`), else ""."""
+    if isinstance(app, Mapping):
+        return str(app.get("icon", "") or "").strip()
+    return ""
+
+
+def bundled_icon(cfg: dict | None = None) -> str:
+    """Path to the bundled icon, or "" when disabled or missing."""
+    cfg = load_config() if cfg is None else cfg
+    if not cfg.get("custom_icon", True):
+        return ""
+    return str(CUSTOM_ICON_FILE) if CUSTOM_ICON_FILE.is_file() else ""
+
+
+def refresh_icon(path: Path, icon: str) -> bool:
+    """Rewrite the Icon= line of a managed file. True when it changed."""
+    if not icon:
+        return False
+    try:
+        lines = path.read_text(errors="ignore").splitlines()
+    except OSError:
+        return False
+    new_line = f"Icon={icon}"
+    index = next((i for i, line in enumerate(lines)
+                  if line.startswith("Icon=")), None)
+    if index is None:
+        marker = generator.MANAGED_MARKER
+        if marker in lines:
+            lines.insert(lines.index(marker), new_line)
+        else:
+            lines.append(new_line)
+    elif lines[index] != new_line:
+        lines[index] = new_line
+    else:
+        return False
+    try:
+        path.write_text("\n".join(lines) + "\n")
+    except OSError:
+        return False
+    return True
+
+
 def _app_source_desktop(app) -> str:
     """Original launcher basename for shadowing (desktop: apps only, else "").
 
@@ -318,6 +362,7 @@ def create_desktop(app, target_dir: Path | None = None,
                    state_file: Path | None = None) -> Path:
     """Create (or refresh) the .desktop file for one app. Returns its path."""
     name, exec_path, icon = _app_fields(app)
+    icon = _explicit_icon(app) or bundled_icon() or icon
     app_id = app.get("id", name) if isinstance(app, Mapping) else (
         getattr(app, "id", name))
     name = _routed_name(name, exec_path)
@@ -389,6 +434,7 @@ def sync(selected: Mapping, target_dir: Path | None = None,
     target_dir = resolve_target_dir(target_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
     state = load_state(state_file)
+    custom_icon = bundled_icon()
 
     created, removed, vanished = [], [], []
     made_executable = []
@@ -414,6 +460,7 @@ def sync(selected: Mapping, target_dir: Path | None = None,
 
     for app_id, app in selected.items():
         name, exec_path, icon = _app_fields(app)
+        icon = _explicit_icon(app) or custom_icon or icon
         name = _routed_name(name, exec_path)
         fixed = _ensure_executable(exec_path)
         if fixed and fixed not in made_executable:
@@ -444,8 +491,11 @@ def sync(selected: Mapping, target_dir: Path | None = None,
         candidate = target_dir / filename
         if not (candidate.is_file() and _is_managed_file(candidate)):
             continue  # nothing on disk to protect; just drop the stale key
-        if info["vanished"] and not prune_vanished:
+        if info["vanished"] and (not prune_vanished
+                                 or info.get("binary_exists", False)):
             state[app_id] = filename  # restore: kept, reported below
+            if custom_icon and refresh_icon(candidate, custom_icon):
+                created.append(filename)
             vanished.append({"app_id": app_id, "filename": filename,
                              "binary": info["binary"],
                              "binary_exists": info.get("binary_exists", False)})
@@ -461,11 +511,15 @@ def sync(selected: Mapping, target_dir: Path | None = None,
         new_id = sel_by_key.get(managed_exec_key(child))
         if new_id and new_id not in state:
             state[new_id] = child.name  # adopt stray file, don't delete
+            if custom_icon and refresh_icon(child, custom_icon):
+                created.append(child.name)
             continue
         if prune_vanished:
             child.unlink()
             removed.append(child.name)
         else:
+            if custom_icon and refresh_icon(child, custom_icon):
+                created.append(child.name)
             key = managed_exec_key(child)
             vanished.append({"app_id": None, "filename": child.name,
                              "binary": key,

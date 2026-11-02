@@ -484,9 +484,10 @@ def interactive(target_dir=None, state_file=None, show_system=None) -> None:
           f"{len(doomed)} to remove."
           + (f" {len(vanished)} previously-managed no longer discovered"
              if vanished else ""))
+    broken, _kept = _split_vanished(vanished)
     if vanished:
         _print_vanished(vanished,
-                        "No longer found, will be deleted:")
+                        "Kept, no longer discovered (program still exists):")
     prune = False
     if sys.stdin.isatty():
         import questionary
@@ -494,7 +495,7 @@ def interactive(target_dir=None, state_file=None, show_system=None) -> None:
                                        qmark=PROMPT_MARK).ask():
             print("Cancelled, nothing changed.")
             return
-        if vanished and questionary.confirm(
+        if broken and questionary.confirm(
                 "Also delete the broken files above?", default=True,
                 qmark=PROMPT_MARK).ask():
             prune = True

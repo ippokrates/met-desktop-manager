@@ -136,6 +136,35 @@ def test_interactive_empty_selection_removes_all(tmp_path, capsys, monkeypatch):
     assert not (target / "app-one.desktop").exists()
 
 
+def test_interactive_keeps_manual_launcher_with_existing_binary(
+        tmp_path, capsys, monkeypatch):
+    """A launcher whose app is not discovered but still on disk is kept,
+    and the message must not say it will be deleted."""
+    from desktop_manager.__main__ import interactive
+
+    target = tmp_path / "apps"
+    target.mkdir()
+    (target / "manual.desktop").write_text(
+        "[Desktop Entry]\nName=Manual (Excluded)\n"
+        "Exec=mullvad-exclude /bin/ls\n"
+        "Type=Application\nX-Managed-By=met-desktop-manager\n")
+    state_file = tmp_path / "state.json"
+    state_file.write_text('{"manual": "manual.desktop"}')
+    monkeypatch.setattr(
+        "desktop_manager.scanner.scan",
+        lambda cfg, show_system=None: [
+            DiscoveredApp(id="desktop:tool", name="Tool",
+                          exec_path="/bin/tool")])
+    monkeypatch.setattr(sys, "stdin", io.StringIO("\n"))
+
+    interactive(target, state_file)
+
+    out = capsys.readouterr().out
+    assert (target / "manual.desktop").exists()
+    assert "will be deleted" not in out
+    assert "kept" in out.lower()
+
+
 def test_preticked_ids_match_by_binary(tmp_path):
     from desktop_manager.__main__ import _preticked_ids
     target = tmp_path / "apps"
