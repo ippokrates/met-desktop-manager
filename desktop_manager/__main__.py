@@ -165,7 +165,7 @@ def _cmd_list(override: bool | None) -> int:
     cfg, _showing = _resolve_show_system(load_config(), override)
     apps = scan(cfg, show_system=override)
     if not apps:
-        print("No apps discovered. Check apps.yaml paths.")
+        print("No apps discovered. Check your config (Options).")
         return 0
     console = Console()
     for group_key, g_apps in group_by_directory(apps).items():
@@ -236,15 +236,14 @@ def _cmd_import(path: str) -> int:
 
 
 def _cmd_options() -> int:
-    """Read-only settings screen. Never writes the config."""
-    import questionary
+    """Settings screen: merged summary, then edit the user's config file."""
     from rich.table import Table
 
     from . import manager
-    from .scanner import config_source, load_config
+    from .scanner import _user_config_file, load_config
 
     cfg = load_config()
-    source = config_source()
+    user_file = _user_config_file()
 
     def enabled(section, default=True):
         """Read `enabled` from {enabled: bool} or a bare bool."""
@@ -260,7 +259,8 @@ def _cmd_options() -> int:
     table = Table(title="Configuration", show_header=False)
     table.add_column("setting", style="bold")
     table.add_column("value")
-    table.add_row("file", str(source) if source else "built-in defaults")
+    table.add_row("defaults", "built-in (scanner.py)")
+    table.add_row("your file", str(user_file))
     table.add_row("target dir", str(manager.resolve_target_dir()))
     table.add_row("path dirs",
                   ", ".join(cfg.get("path_dirs", []) or []) or "-")
@@ -279,19 +279,12 @@ def _cmd_options() -> int:
                   f"{len(cfg.get('excludes', []) or [])} patterns")
     Console().print(table)
 
-    choice = questionary.select(
-        "Options",
-        choices=["Open in editor", "Back"],
-        qmark=PROMPT_MARK,
-    ).ask()
-    if choice != "Open in editor":
-        return 0
-    if source is None:
-        print("No config file found, built-in defaults are in use.")
+    if not user_file.is_file():
+        print(f"No config file at {user_file}. Run met from a terminal first.")
         return 0
     editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "nano"
     try:
-        subprocess.run([*shlex.split(editor), str(source)])
+        subprocess.run([*shlex.split(editor), str(user_file)])
     except (FileNotFoundError, OSError) as e:
         print(f"Could not start editor: {e}")
     return 0
@@ -329,8 +322,11 @@ def _menu(override: bool | None) -> int:
     import questionary
 
     from . import manager
-    from .scanner import load_config
+    from .scanner import load_config, sync_user_config
 
+    # Only interactive sessions write the config: creates it on first run and
+    # appends options added by newer versions. Values are never changed.
+    sync_user_config()
     while True:
         cfg = load_config()
         target_dir = manager.resolve_target_dir()
@@ -433,7 +429,7 @@ def interactive(target_dir=None, state_file=None, show_system=None) -> None:
 
     target_dir/state_file default to the real locations; tests pass tmp paths.
     show_system True/False forces system launchers shown/hidden (CLI flags);
-    None follows apps.yaml.
+    None follows the config file.
     """
     from pathlib import Path
 
@@ -448,7 +444,7 @@ def interactive(target_dir=None, state_file=None, show_system=None) -> None:
     cfg, showing = _resolve_show_system(load_config(), show_system)
     apps = scan(cfg, show_system=show_system)
     if not apps:
-        print("No apps discovered. Check apps.yaml paths.")
+        print("No apps discovered. Check your config (Options).")
         return
 
     # Repair AppImage launchers whose file an update replaced, so the picker

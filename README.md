@@ -53,8 +53,8 @@ source .venv/bin/activate
 pip install -r requirements.txt   # or: pip install -e ".[dev]"
 ```
 
-Then open `apps.yaml` and point `path_dirs` / `extra_dirs` at the folders
-where your applications live (defaults fit the author's machine).
+Run `met` once: it creates `~/.config/desktop-manager/apps.yaml`. Open
+`Options` to edit it and point `path_dirs` / `extra_dirs` at your app folders.
 
 Commands: `met` or `desktop-manager` (two names for the same program).
 
@@ -91,8 +91,8 @@ met  12 app(s) managed  ·  system apps hidden
 
 - **Pick apps**: the checkbox picker described below. Returns to the shell.
 - **List discovered**: same output as `--list`, then back to the menu.
-- **Options**: settings summary. Read-only, plus "Open in editor" for
-  `apps.yaml` (`$VISUAL`, then `$EDITOR`, then `nano`).
+- **Options**: settings summary, then opens
+  `~/.config/desktop-manager/apps.yaml` (`$VISUAL`, then `$EDITOR`, then `nano`).
 - **Backup / restore**: export or import a JSON backup.
 - **Quit**: leave without changes.
 
@@ -183,10 +183,14 @@ met update
 Prints `Already up to date` when there is nothing newer. It refuses to touch
 a copy installed from a local folder, so a dev checkout is never replaced.
 
-## ⚙️ Configuration (`apps.yaml`)
+## ⚙️ Configuration
 
-First found wins: `~/.config/desktop-manager/apps.yaml`, then the repo's
-`apps.yaml`, then built-in defaults.
+One file: `~/.config/desktop-manager/apps.yaml`, created on the first
+interactive run. Built-in defaults live in `scanner.py`; your file is merged
+over them, so it only needs the options you change.
+
+`met update` appends options added by newer versions to the end of the file.
+Values you already set are never changed.
 
 ```yaml
 path_dirs:   # scanned flat, executables only
@@ -210,7 +214,7 @@ target_dir: ~/.local/share/applications
 ### Custom launcher icon
 
 Every `.desktop` file met generates uses the bundled icon at
-`desktop_manager/data/met.png`. Turn it off in `apps.yaml`:
+`desktop_manager/data/met.png`. Turn it off in your config:
 
 ```yaml
 custom_icon: false
@@ -274,7 +278,7 @@ this form so a future update cannot break it.
 
 The newest matching file is adopted even while the old one is still on disk,
 so a download you never cleaned up cannot leave the icon on an old version.
-Set `appimage.prefer_newest: false` in `apps.yaml` to repair only when the
+Set `appimage.prefer_newest: false` in your config to repair only when the
 recorded file is gone.
 
 Plain binaries, flatpak and snap launchers keep their direct `Exec=`. They
@@ -297,7 +301,7 @@ met --import backup.json        # new machine, then run `met` once
 pipx reinstall met-desktop-manager
 ```
 
-### "No apps discovered. Check apps.yaml paths."
+### "No apps discovered. Check your config (Options)."
 Point `path_dirs` / `extra_dirs` at folders that exist on your machine.
 
 ### WARNING: state.json is unreadable
@@ -312,7 +316,7 @@ in the summary as `made executable`.
 A newer file sits next to the old one, and the launcher still names the old
 path. Run `met`, or just click the icon: the router adopts the newest match by
 modification time and re-points the launcher. To stay on an old build, put
-`appimage: {prefer_newest: false}` in `apps.yaml`.
+`appimage: {prefer_newest: false}` in your config.
 
 ### AppImage icon does nothing after an update
 The app replaced its own file (or was renamed). Run `met`: it re-links the

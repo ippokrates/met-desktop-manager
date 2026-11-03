@@ -1,6 +1,6 @@
 """Scan system for executables.
 
-Sources (per apps.yaml):
+Sources (per config):
   1. desktop_files — Exec= paths harvested from installed .desktop
      launchers (curated by package maintainers, best metadata)
   2. path_dirs   — non-recursive, executable bit required
@@ -25,8 +25,6 @@ from pathlib import Path
 
 from .generator import MANAGED_MARKER
 
-CONFIG_FILE = Path(__file__).resolve().parent.parent / "apps.yaml"
-
 
 def _user_config_file() -> Path:
     xdg = os.environ.get("XDG_CONFIG_HOME", "")
@@ -34,8 +32,8 @@ def _user_config_file() -> Path:
     return base / "desktop-manager" / "apps.yaml"
 
 
-# Built-in defaults used when no config file exists (e.g. pipx install).
-# Mirrors the shipped apps.yaml; `~` is expanded at scan time.
+# Defaults. The user's file is merged over these, so it only needs overrides.
+# `~` and $VARS are expanded at scan time.
 DEFAULT_CONFIG = {
     "path_dirs": ["~/.local/bin", "/usr/local/bin"],
     "extra_dirs": ["/opt", "~/Downloads", "~/Applications", "~/.local/bin"],
@@ -98,30 +96,89 @@ class DiscoveredApp:
     needs_chmod: bool = False  # .AppImage found without the exec bit
 
 
-def _first_config_file() -> Path | None:
-    """First existing, non-empty config file in lookup order, or None."""
-    for candidate in (_user_config_file(), CONFIG_FILE):
-        if candidate.is_file() and _read_config_file(candidate):
-            return candidate
-    return None
+CONFIG_HEADER = "# met config. Missing options use built-in defaults.\n"
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Merge override on top of base; nested dicts merge, everything else wins.
+
+    Lists are replaced whole, so a user who sets `path_dirs` keeps control
+    of it. Example:
+      _deep_merge({"a": {"x": 1, "y": 2}}, {"a": {"x": 9}})
+        -> {"a": {"x": 9, "y": 2}}
+    """
+    out = dict(base)
+    for key, value in (override or {}).items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _deep_merge(out[key], value)
+        else:
+            out[key] = value
+    return out
 
 
 def load_config(path: str | Path | None = None) -> dict:
-    """Load config, first found wins (never crashes, never writes).
+    """Load config: built-in defaults merged with the user's overrides.
 
-    Order: explicit path arg -> ~/.config/desktop-manager/apps.yaml ->
-    apps.yaml next to the package (repo/dev mode) -> built-in defaults.
-    An explicit-but-missing path returns {} (used by tests).
+    Order: an explicit path arg is returned as-is (used by tests); otherwise
+    ~/.config/desktop-manager/apps.yaml is merged over DEFAULT_CONFIG.
+    Never crashes, never writes. An explicit missing path returns {}.
     """
     if path is not None:
         return _read_config_file(Path(path).expanduser())
-    found = _first_config_file()
-    return _read_config_file(found) if found else dict(DEFAULT_CONFIG)
+    return _deep_merge(DEFAULT_CONFIG, _read_config_file(_user_config_file()))
 
 
-def config_source() -> Path | None:
-    """Return the file load_config() reads, or None when using defaults."""
-    return _first_config_file()
+def _append_missing_keys(p: Path, defaults: dict) -> list[str]:
+    """Append top-level defaults missing from the user file. Never rewrites.
+
+    Text is appended, so comments and ordering survive. A broken file is
+    left alone: we cannot tell what the user meant.
+    """
+    import yaml
+
+    text = p.read_text()
+    try:
+        user = yaml.safe_load(text) or {}
+    except Exception:
+        return []
+    missing = [key for key in defaults if key not in user]
+    if not missing:
+        return []
+    if not text.endswith("\n"):
+        text += "\n"
+    text += "\n# --- added by met, edit or delete freely ---\n"
+    for key in missing:
+        text += yaml.safe_dump({key: defaults[key]}, sort_keys=False)
+    p.write_text(text)
+    return missing
+
+
+def sync_user_config() -> None:
+    """Create the user config if missing, then add newly shipped options.
+
+    Called once per interactive session. Values already in the file are
+    never changed; only missing top-level keys are appended.
+    """
+    import yaml
+
+    p = _user_config_file()
+    if not p.is_file():
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(CONFIG_HEADER + yaml.safe_dump(DEFAULT_CONFIG,
+                                                        sort_keys=False))
+        except OSError as e:
+            print(f"note: could not create {p}: {e}")
+            return
+        print(f"note: created {p}")
+        return
+    try:
+        added = _append_missing_keys(p, DEFAULT_CONFIG)
+    except OSError as e:
+        print(f"note: could not add new options to {p}: {e}")
+        return
+    if added:
+        print(f"note: added new option(s) to {p}: {', '.join(added)}")
 
 
 def _read_config_file(p: Path) -> dict:
@@ -730,7 +787,7 @@ def scan_snap(enabled: bool = True) -> list[DiscoveredApp]:
 
 
 def scan(config: dict | None = None, show_system: bool | None = None) -> list[DiscoveredApp]:
-    """Discover apps per config (loads apps.yaml when None). Sorted by name.
+    """Discover apps per config (loads the config when None). Sorted by name.
 
     System launchers hide by default (`system_apps.hide`, True). Pass
     show_system=True/False to force show/hide for one run (CLI flag,

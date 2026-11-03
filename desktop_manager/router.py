@@ -18,7 +18,7 @@ file last, while name ordering has no universal answer (`1.9.0` sorts after
 `1.10.2` as text; `2.2a` vs `2.2.1` is ambiguous). The newest match is adopted
 even while the old file still exists, so a download that is never cleaned up
 cannot leave the launcher on an old version. `appimage.prefer_newest: false`
-in apps.yaml restricts this to the repair case (recorded file gone).
+in the config restricts this to the repair case (recorded file gone).
 
 Only AppImages are routed. Plain binaries, flatpak and snap launchers keep
 their direct `Exec=`, so they still work if this tool is gone.
@@ -93,7 +93,7 @@ def _sort_key(path: Path) -> tuple:
 def _prefer_newest() -> bool:
     """Whether a newer AppImage beats a still-working recorded one.
 
-    `appimage.prefer_newest` in apps.yaml, default True. Read once per
+    `appimage.prefer_newest` in the config, default True. Read once per
     resolve() call (launch and heal both go through it).
     """
     return bool(scanner.load_config().get("appimage", {})

@@ -27,14 +27,14 @@ CUSTOM_ICON_FILE = Path(__file__).resolve().parent / "data" / "met.png"
 def resolve_target_dir(target_dir: Path | str | None = None) -> Path:
     """Return the directory holding .desktop files.
 
-    Order: explicit argument > `target_dir` from apps.yaml > the default
+    Order: explicit argument > `target_dir` from config > the default
     `~/.local/share/applications`. Warns when a configured directory does
     not exist yet, because we will create it and the app menu will not
-    read it (usually a typo in apps.yaml).
+    read it (usually a typo in the config file).
 
     Example:
       resolve_target_dir(tmp_path)        -> tmp_path (config not read)
-      apps.yaml target_dir: /tmp/met     -> /tmp/met
+      config target_dir: /tmp/met        -> /tmp/met
       no config key                      -> ~/.local/share/applications
     """
     if target_dir:
@@ -44,7 +44,7 @@ def resolve_target_dir(target_dir: Path | str | None = None) -> Path:
         return DEFAULT_TARGET_DIR
     resolved = Path(configured).expanduser()
     if not resolved.is_dir():
-        print(f"WARNING: target_dir from apps.yaml does not exist: {resolved}")
+        print(f"WARNING: target_dir from config does not exist: {resolved}")
         print("         It will be created, but your app menu will not read it.")
     return resolved
 
