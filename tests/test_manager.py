@@ -3,11 +3,12 @@
 Nothing here may touch ~/.local/share/applications or the real state.json.
 """
 import json
+import types
 from pathlib import Path
 
 import pytest
 
-from desktop_manager import generator, manager
+from desktop_manager import generator, manager, scanner
 
 
 @pytest.fixture
@@ -324,6 +325,85 @@ def test_remove_desktop_refuses_unmanaged(dirs):
     assert handmade.exists()
 
 
+# --- Desktop shortcuts (desktop_shortcuts, off by default) -----------------
+
+
+def test_sync_mirrors_launchers_to_desktop(dirs, tmp_path):
+    target, state = dirs
+    desktop = tmp_path / "Desktop"
+    desktop.mkdir()
+    manager.sync({"file:vesktop": _app()}, target, state,
+                 desktop_shortcuts=True, desktop_dir=desktop)
+    copy = desktop / "vesktop.desktop"
+    assert copy.is_file()
+    assert copy.read_text() == (target / "vesktop.desktop").read_text()
+    assert copy.stat().st_mode & 0o111  # launchable on KDE/XFCE
+
+
+def test_sync_removes_desktop_copy_on_deselect(dirs, tmp_path):
+    target, state = dirs
+    desktop = tmp_path / "Desktop"
+    desktop.mkdir()
+    app = _app()
+    manager.sync({"file:vesktop": app}, target, state,
+                 desktop_shortcuts=True, desktop_dir=desktop)
+    copy = desktop / "vesktop.desktop"
+    assert copy.is_file()
+    manager.sync({}, target, state, discovered={"file:vesktop": app},
+                 desktop_shortcuts=True, desktop_dir=desktop)
+    assert not copy.exists()
+
+
+def test_desktop_copy_never_overwrites_handmade(dirs, tmp_path):
+    target, state = dirs
+    desktop = tmp_path / "Desktop"
+    desktop.mkdir()
+    handmade = desktop / "vesktop.desktop"
+    handmade.write_text("[Desktop Entry]\nName=Mine\nExec=/mine\n")
+    manager.sync({"file:vesktop": _app()}, target, state,
+                 desktop_shortcuts=True, desktop_dir=desktop)
+    assert handmade.read_text().startswith("[Desktop Entry]\nName=Mine")
+    assert (desktop / "vesktop-2.desktop").is_file()
+
+
+def test_desktop_shortcuts_off_by_default(dirs, tmp_path):
+    target, state = dirs
+    desktop = tmp_path / "Desktop"
+    desktop.mkdir()
+    manager.sync({"file:vesktop": _app()}, target, state)
+    assert list(desktop.iterdir()) == []
+
+
+def test_create_and_remove_desktop_copy(dirs, tmp_path):
+    target, state = dirs
+    desktop = tmp_path / "Desktop"
+    desktop.mkdir()
+    manager.create_desktop(_app(), target, state,
+                           desktop_shortcuts=True, desktop_dir=desktop)
+    copy = desktop / "vesktop.desktop"
+    assert copy.is_file()
+    assert manager.remove_desktop("file:vesktop", target, state,
+                                  desktop_shortcuts=True,
+                                  desktop_dir=desktop) is True
+    assert not copy.exists()
+
+
+def test_resolve_desktop_dir_uses_xdg(monkeypatch):
+    monkeypatch.setattr(manager.shutil, "which",
+                        lambda name: "/usr/bin/xdg-user-dir")
+    monkeypatch.setattr(
+        manager.subprocess, "run",
+        lambda *a, **k: types.SimpleNamespace(
+            returncode=0, stdout="/home/you/Bureau\n"))
+    assert manager.resolve_desktop_dir() == Path("/home/you/Bureau")
+
+
+def test_resolve_desktop_dir_falls_back_to_home(monkeypatch, tmp_path):
+    monkeypatch.setattr(manager.shutil, "which", lambda name: None)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert manager.resolve_desktop_dir() == tmp_path / "Desktop"
+
+
 def test_managed_files_lists_only_ours(dirs):
     target, state = dirs
     manager.create_desktop(_app(), target, state)
@@ -435,6 +515,14 @@ def _fake_icon(tmp_path):
     icon = tmp_path / "met.png"
     icon.write_bytes(b"\x89PNG\r\n\x1a\n")
     return icon
+
+
+def test_custom_icon_off_by_default(monkeypatch):
+    """Fresh installs use each app's detected icon, not the bundled met icon."""
+    assert scanner.DEFAULT_CONFIG["custom_icon"] is False
+    monkeypatch.setattr(manager, "load_config", lambda: {})
+    assert manager.bundled_icon() == ""
+    assert manager.bundled_icon({}) == ""
 
 
 def test_custom_icon_used_when_enabled(dirs, tmp_path, monkeypatch):

@@ -204,7 +204,8 @@ system_apps:  # system launchers hide by default; allowlist shows, blacklist hid
 flatpak: {enabled: true}
 snap: {enabled: true}
 appimage: {prefer_newest: true}  # newest AppImage wins, even while the old file exists
-custom_icon: true  # bundled met icon for every generated launcher
+custom_icon: false  # detected app icons; true = bundled met icon
+desktop_shortcuts: false  # also copy managed launchers to ~/Desktop
 excludes:    # substrings or globs, e.g. uninstall, "*.so*", crashpad
 target_dir: ~/.local/share/applications
 ```
@@ -213,20 +214,37 @@ target_dir: ~/.local/share/applications
 
 ### Custom launcher icon
 
-Every `.desktop` file met generates uses the bundled icon at
-`desktop_manager/data/met.png`. Turn it off in your config:
+By default every launcher uses the icon detected for the app. To use the
+bundled met icon at `desktop_manager/data/met.png` instead, turn it on:
 
 ```yaml
-custom_icon: false
+custom_icon: true
 ```
 
-Then run `met` or `met --sync --all` to rewrite existing launchers and
-restore each app's own detected icon. `met --create ... --icon X` still
-uses `X`.
+Then run `met` or `met --sync --all` to rewrite existing launchers with the
+bundled icon. `met --create ... --icon X` always uses `X`.
 
 A normal `met` run also refreshes the `Icon=` line of managed launchers it
-keeps but cannot discover, such as `--create` entries. Turning the bundled
-icon off leaves those kept files as they are.
+keeps but cannot discover, such as `--create` entries. With the bundled icon
+enabled those kept files get the met icon; with the default off they are
+left as they are.
+
+### Desktop shortcuts
+
+Set `desktop_shortcuts: true` to also copy every managed launcher into your
+Desktop folder:
+
+```yaml
+desktop_shortcuts: true
+```
+
+The folder is found with `xdg-user-dir DESKTOP`, so localized names like
+`~/Schreibtisch` work. Copies are executable, and unticking an app removes
+its Desktop copy on the next sync. Handmade Desktop files are never
+overwritten; ours gets a `-2` name instead.
+
+The option is off by default. If your desktop is GNOME, you may still need
+to right-click a copied icon and choose **Allow launching**.
 
 ### Location overrides (environment)
 

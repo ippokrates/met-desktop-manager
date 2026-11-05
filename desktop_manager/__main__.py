@@ -275,6 +275,8 @@ def _cmd_options() -> int:
     table.add_row("appimages",
                   "adopt newest" if appimage_cfg.get("prefer_newest", True)
                   else "repair only")
+    table.add_row("desktop shortcuts",
+                  "on" if cfg.get("desktop_shortcuts", False) else "off")
     table.add_row("excludes",
                   f"{len(cfg.get('excludes', []) or [])} patterns")
     Console().print(table)
@@ -388,9 +390,11 @@ def main() -> int | None:
     if args.create:
         if not args.exec_path:
             parser.error("--create NAME requires --exec PATH")
+        cfg = load_config()
         dest = manager.create_desktop(
             {"id": args.create.lower(), "name": args.create,
-             "exec_path": args.exec_path, "icon": args.icon})
+             "exec_path": args.exec_path, "icon": args.icon},
+            desktop_shortcuts=bool(cfg.get("desktop_shortcuts", False)))
         ok, msg = manager.validate_desktop_file(dest)
         print(f"Created {dest} (valid={ok}: {msg})")
         return
@@ -406,7 +410,9 @@ def main() -> int | None:
             selected = {a.id: a for a in apps}
         else:
             parser.error("--sync requires --all (interactive picker is the no-args mode)")
-        result = manager.sync(selected, discovered={a.id: a for a in apps})
+        result = manager.sync(selected, discovered={a.id: a for a in apps},
+                              desktop_shortcuts=bool(
+                                  cfg.get("desktop_shortcuts", False)))
         print(f"Synced: {len(result['created'])} created/updated, "
               f"{len(result['removed'])} removed.")
         _print_made_executable(result)
@@ -498,7 +504,9 @@ def interactive(target_dir=None, state_file=None, show_system=None) -> None:
 
     result = manager.sync(selected, target_dir, state_file,
                           discovered={a.id: a for a in apps},
-                          prune_vanished=prune)
+                          prune_vanished=prune,
+                          desktop_shortcuts=bool(
+                              cfg.get("desktop_shortcuts", False)))
     _print_summary(result, manager, target_dir)
     updatecheck.auto_check()
 

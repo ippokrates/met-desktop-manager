@@ -49,6 +49,31 @@ def resolve_target_dir(target_dir: Path | str | None = None) -> Path:
     return resolved
 
 
+def resolve_desktop_dir() -> Path:
+    """Return the user's Desktop folder.
+
+    Uses `xdg-user-dir DESKTOP` when available so localized folders
+    (~/Schreibtisch, ~/Bureau) work, then falls back to ~/Desktop.
+
+    Example:
+      xdg-user-dir -> /home/you/Schreibtisch
+      no tool      -> /home/you/Desktop
+    """
+    tool = shutil.which("xdg-user-dir")
+    if tool:
+        try:
+            out = subprocess.run([tool, "DESKTOP"], capture_output=True,
+                                 text=True, timeout=5)
+            value = out.stdout.strip()
+            if out.returncode == 0 and value:
+                resolved = Path(value).expanduser()
+                if resolved != Path.home():
+                    return resolved
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return Path.home() / "Desktop"
+
+
 def _default_state_file() -> Path:
     """Per-user state location, working for repo dev and pipx installs.
 
@@ -258,7 +283,7 @@ def _explicit_icon(app) -> str:
 def bundled_icon(cfg: dict | None = None) -> str:
     """Path to the bundled icon, or "" when disabled or missing."""
     cfg = load_config() if cfg is None else cfg
-    if not cfg.get("custom_icon", True):
+    if not cfg.get("custom_icon", False):
         return ""
     return str(CUSTOM_ICON_FILE) if CUSTOM_ICON_FILE.is_file() else ""
 
@@ -359,8 +384,14 @@ def _routed_name(name: str, exec_path: str) -> str:
 
 
 def create_desktop(app, target_dir: Path | None = None,
-                   state_file: Path | None = None) -> Path:
-    """Create (or refresh) the .desktop file for one app. Returns its path."""
+                   state_file: Path | None = None,
+                   desktop_shortcuts: bool = False,
+                   desktop_dir: Path | None = None) -> Path:
+    """Create (or refresh) the .desktop file for one app. Returns its path.
+
+    With desktop_shortcuts=True, also mirrors managed launchers to the
+    Desktop folder.
+    """
     name, exec_path, icon = _app_fields(app)
     icon = _explicit_icon(app) or bundled_icon() or icon
     app_id = app.get("id", name) if isinstance(app, Mapping) else (
@@ -393,12 +424,19 @@ def create_desktop(app, target_dir: Path | None = None,
     state[app_id] = dest.name
     save_state(state, state_file)
     _refresh_desktop_db(target_dir)
+    if desktop_shortcuts:
+        mirror_desktop(target_dir, desktop_dir)
     return dest
 
 
 def remove_desktop(app_id: str, target_dir: Path | None = None,
-                   state_file: Path | None = None) -> bool:
-    """Delete our managed file for app_id. Returns True if something was removed."""
+                   state_file: Path | None = None,
+                   desktop_shortcuts: bool = False,
+                   desktop_dir: Path | None = None) -> bool:
+    """Delete our managed file for app_id. Returns True if something was removed.
+
+    With desktop_shortcuts=True, the matching Desktop copy is removed too.
+    """
     target_dir = resolve_target_dir(target_dir)
     state = load_state(state_file)
     removed = False
@@ -410,12 +448,15 @@ def remove_desktop(app_id: str, target_dir: Path | None = None,
     save_state(state, state_file)
     if removed:
         _refresh_desktop_db(target_dir)
+    if desktop_shortcuts:
+        mirror_desktop(target_dir, desktop_dir)
     return removed
 
 
 def sync(selected: Mapping, target_dir: Path | None = None,
          state_file: Path | None = None, discovered=None,
-         prune_vanished: bool = False) -> dict:
+         prune_vanished: bool = False, desktop_shortcuts: bool = False,
+         desktop_dir: Path | None = None) -> dict:
     """Reconcile target_dir with the selected apps.
 
     `selected`: mapping of app_id -> DiscoveredApp (or plain dict).
@@ -423,6 +464,8 @@ def sync(selected: Mapping, target_dir: Path | None = None,
       genuine deselect (binary still around) from a vanished app.
     `prune_vanished`: when False (default), previously-managed apps whose
       binary vanished are KEPT and reported, never silently deleted.
+    `desktop_shortcuts`: when True, mirror managed launchers to the Desktop
+      folder and remove stale copies. Off by default.
 
     Returns {'created': [...], 'removed': [...], 'adopted': {old: new},
     'vanished': [{'app_id', 'filename', 'binary', 'binary_exists'}],
@@ -528,6 +571,8 @@ def sync(selected: Mapping, target_dir: Path | None = None,
     save_state(state, state_file)
     if created or removed:
         _refresh_desktop_db(target_dir)
+    if desktop_shortcuts:
+        mirror_desktop(target_dir, desktop_dir)
     return {"created": created, "removed": removed,
             "adopted": adopted, "vanished": vanished,
             "made_executable": made_executable}
@@ -539,6 +584,71 @@ def managed_files(target_dir: Path | None = None) -> list[Path]:
     if not target_dir.is_dir():
         return []
     return [p for p in target_dir.glob("*.desktop") if _is_managed_file(p)]
+
+
+def _desktop_copy_dest(desktop_dir: Path, filename: str) -> Path:
+    """Choose a Desktop path for one launcher, never overwriting handmade files.
+
+    Reuses our own copy, otherwise tries `name.desktop`, `name-2.desktop`,
+    and so on.
+
+    Example:
+      Desktop/vesktop.desktop is handmade -> Desktop/vesktop-2.desktop
+    """
+    stem = (filename[:-len(".desktop")]
+            if filename.endswith(".desktop") else filename)
+    candidate = desktop_dir / f"{stem}.desktop"
+    i = 2
+    while candidate.exists() or candidate.is_symlink():
+        if candidate.is_file() and _is_managed_file(candidate):
+            return candidate
+        candidate = desktop_dir / f"{stem}-{i}.desktop"
+        i += 1
+    return candidate
+
+
+def mirror_desktop(target_dir: Path | None = None,
+                   desktop_dir: Path | None = None) -> dict:
+    """Copy managed launchers to the Desktop folder; remove stale copies.
+
+    Desktop copies are executable (755) so KDE/XFCE can launch them. Only
+    files carrying our marker are ever overwritten or removed; a handmade
+    Desktop file with the same name is left alone and ours gets `-2`.
+
+    Returns `{"copied": [names], "removed": [names]}`. A missing Desktop
+    folder is reported and skipped, never created.
+    """
+    target_dir = resolve_target_dir(target_dir)
+    desktop_dir = Path(desktop_dir) if desktop_dir else resolve_desktop_dir()
+    if not desktop_dir.is_dir():
+        print(f"note: Desktop folder not found: {desktop_dir} "
+              "(no shortcuts copied)")
+        return {"copied": [], "removed": []}
+
+    copied, removed, wanted = [], [], set()
+    for src in sorted(managed_files(target_dir), key=lambda p: p.name):
+        dest = _desktop_copy_dest(desktop_dir, src.name)
+        wanted.add(dest.name)
+        try:
+            text = src.read_text(errors="ignore")
+            changed = (not dest.is_file()
+                       or dest.read_text(errors="ignore") != text)
+            if changed:
+                dest.write_text(text)
+                copied.append(dest.name)
+            dest.chmod(0o755)
+        except OSError:
+            continue
+
+    for child in desktop_dir.glob("*.desktop"):
+        if child.name in wanted or not _is_managed_file(child):
+            continue
+        try:
+            child.unlink()
+            removed.append(child.name)
+        except OSError:
+            pass
+    return {"copied": copied, "removed": removed}
 
 
 # --- export / import (portable backup) -------------------------------------
